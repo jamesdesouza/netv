@@ -193,6 +193,15 @@ x265, AV1).
 Check out [iptv-org/iptv](https://github.com/iptv-org/iptv) -- a community-maintained
 collection of publicly available IPTV channels from around the world.
 
+**Where can I get TV guide data?**
+
+The default choice is [iptv-org/epg](https://github.com/iptv-org/epg), but this didn't
+work reliably for me. I've had consistent success with `tools/zap2xml.py` for over a
+year -- it scrapes guide data from zap2it/gracenote.
+
+For a more robust solution, consider [Schedules Direct](https://schedulesdirect.org/) --
+your membership helps fund Open Source projects.
+
 **How do I set up HDHomeRun?**
 
 HDHomeRun devices provide an M3U playlist, but it lacks EPG channel IDs. Use the
