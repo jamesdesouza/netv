@@ -139,7 +139,7 @@ x265, AV1).
 - Use HTTPS for Chromecast and remote access
 - The app binds to `0.0.0.0` -- use a firewall to restrict access
 
-## What Does "NetV" Mean?
+## What Does "neTV" Mean?
 
 Yes.
 
