@@ -1,14 +1,14 @@
-# NetV
+# neTV
 
 A minimal, self-hosted web interface for IPTV streams.
 
 ## Why This Exists
 
-We built NetV because we couldn't find a clean, lightweight interface for
+We built neTV because we couldn't find a clean, lightweight interface for
 Xtream IPTV services. Existing solutions were either bloated media centers or
 clunky apps that didn't work well across devices.
 
-**NetV is intentionally minimal.** It does one thing: play your IPTV streams
+**neTV is intentionally minimal.** It does one thing: play your IPTV streams
 with a clean UI that works on desktop, tablet, mobile, and Chromecast.
 
 We also prioritize **keyboard navigation** throughout. The entire app is
@@ -23,7 +23,7 @@ If you want a full-featured media center, you'll probably be happier with:
 - **[Emby](https://emby.media/)** - Media server with IPTV support
 - **[Plex](https://plex.tv/)** - Popular media platform with live TV
 
-These are excellent, mature projects with large communities. NetV exists for
+These are excellent, mature projects with large communities. neTV exists for
 users who find them overkill and just want a simple IPTV player.
 
 ## Features
