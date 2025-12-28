@@ -6,6 +6,10 @@ A minimal, self-hosted web interface for IPTV streams.
 
 ![Player](screenshots/player.png)
 
+![VOD](screenshots/vod.png)
+
+![Series](screenshots/series.png)
+
 ![Settings](screenshots/settings.png)
 
 ## Why This Exists
