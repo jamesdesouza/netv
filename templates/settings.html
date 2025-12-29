@@ -341,9 +341,21 @@
   <!-- User-Agent -->
   <div id="user-agent" class="mb-8 p-4 bg-gray-800 rounded">
     <h3 class="text-xl font-semibold mb-4">User-Agent</h3>
-    <p class="text-sm text-gray-400 mb-4">HTTP User-Agent header sent when fetching streams. Some providers filter based on this.</p>
+    <p class="text-sm text-gray-400 mb-4">HTTP User-Agent header sent when fetching streams. Only affects transcoding; passthrough uses the client's native user-agent.</p>
     <div class="space-y-4" id="user-agent-settings">
       <div class="space-y-2">
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="radio" name="user_agent_preset" value="tivimate" {% if user_agent_preset == 'tivimate' %}checked{% endif %}
+                 class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+          <span>TiviMate</span>
+          <span class="text-xs text-gray-500 font-mono">TiviMate/4.7.0</span>
+        </label>
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="radio" name="user_agent_preset" value="chrome" {% if user_agent_preset == 'chrome' %}checked{% endif %}
+                 class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+          <span>Chrome</span>
+          <span class="text-xs text-gray-500 font-mono truncate max-w-xs">Mozilla/5.0 ... Chrome/...</span>
+        </label>
         <label class="flex items-center gap-3 cursor-pointer">
           <input type="radio" name="user_agent_preset" value="default" {% if user_agent_preset == 'default' %}checked{% endif %}
                  class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
@@ -355,18 +367,6 @@
                  class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
           <span>VLC</span>
           <span class="text-xs text-gray-500 font-mono">VLC/3.0.20 LibVLC/3.0.20</span>
-        </label>
-        <label class="flex items-center gap-3 cursor-pointer">
-          <input type="radio" name="user_agent_preset" value="chrome" {% if user_agent_preset == 'chrome' %}checked{% endif %}
-                 class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-          <span>Chrome</span>
-          <span class="text-xs text-gray-500 font-mono truncate max-w-xs">Mozilla/5.0 ... Chrome/...</span>
-        </label>
-        <label class="flex items-center gap-3 cursor-pointer">
-          <input type="radio" name="user_agent_preset" value="tivimate" {% if user_agent_preset == 'tivimate' %}checked{% endif %}
-                 class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-          <span>TiviMate</span>
-          <span class="text-xs text-gray-500 font-mono">TiviMate/4.7.0</span>
         </label>
         <label class="flex items-center gap-3 cursor-pointer">
           <input type="radio" name="user_agent_preset" value="custom" {% if user_agent_preset == 'custom' %}checked{% endif %}
