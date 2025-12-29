@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Multi-stage build: compile FFmpeg with all HW accel, then copy to slim runtime
 #
 # We use Ubuntu 24.04 for BOTH stages because:
