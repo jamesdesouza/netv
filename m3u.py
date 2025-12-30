@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import logging
 import re
 import threading
 import time
-from typing import Any
 
-from cache import LIVE_CACHE_TTL
-from cache import SERIES_CACHE_TTL
-from cache import VOD_CACHE_TTL
-from cache import get_cache
-from cache import get_cache_lock
-from cache import get_sources
-from cache import load_file_cache
-from cache import save_file_cache
-from cache import update_source_epg_url
+from cache import (
+    LIVE_CACHE_TTL,
+    SERIES_CACHE_TTL,
+    VOD_CACHE_TTL,
+    get_cache,
+    get_cache_lock,
+    get_sources,
+    load_file_cache,
+    save_file_cache,
+    update_source_epg_url,
+)
 from util import safe_urlopen
 from xtream import XtreamClient
 
@@ -181,17 +184,7 @@ def fetch_source_vod_data(source: Any) -> tuple[list[dict], list[dict]]:
 
 def parse_epg_urls(raw: list) -> list[tuple[str, int, str]]:
     """Convert JSON list back to tuples (JSON stores tuples as lists)."""
-    result = []
-    for u in raw:
-        if isinstance(u, list) and len(u) >= 3:
-            result.append((u[0], u[1], u[2]))
-        elif isinstance(u, list) and len(u) == 2:
-            result.append((u[0], u[1], ""))
-        elif isinstance(u, str):
-            result.append((u, 120, ""))
-        elif isinstance(u, tuple):
-            result.append(u)
-    return result
+    return [(u[0], u[1], u[2]) for u in raw if isinstance(u, (list, tuple)) and len(u) >= 3]
 
 
 def load_all_live_data() -> tuple[list[dict], list[dict], list[tuple[str, int, str]]]:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import json
 import sys
-from pathlib import Path
-from unittest.mock import MagicMock
-from unittest.mock import patch
 
 import pytest
 
@@ -180,3 +180,9 @@ class TestXtreamClientApi:
         url = mock_urlopen.call_args[0][0]
         assert "action=get_vod_info" in url
         assert "vod_id=100" in url
+
+
+if __name__ == "__main__":
+    from testing import run_tests
+
+    run_tests(__file__)

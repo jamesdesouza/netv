@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import sys
-from datetime import UTC
-from datetime import datetime
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import sys
 
 import pytest
 
 
 sys.path.insert(0, str(Path(__file__).parent))
-import epg_db
 from epg_db import Program
+
+import epg_db
 
 
 @pytest.fixture
@@ -391,3 +391,9 @@ class TestProgram:
         p = Program(channel_id="ch1", title="Test", start=now, stop=now + timedelta(hours=1))
         assert p.desc == ""
         assert p.source_id == ""
+
+
+if __name__ == "__main__":
+    from testing import run_tests
+
+    run_tests(__file__)

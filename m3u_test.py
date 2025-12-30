@@ -10,11 +10,6 @@ import pytest
 @pytest.fixture
 def m3u_module(tmp_path: Path):
     """Import m3u module with mocked cache."""
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).parent))
-
-    # Mock cache before importing m3u
     import cache
 
     cache.SERVER_SETTINGS_FILE = tmp_path / "server_settings.json"
@@ -102,16 +97,6 @@ class TestParseEpgUrls:
         assert result[0] == ("http://epg1.com", 120, "src1")
         assert result[1] == ("http://epg2.com", 60, "src2")
 
-    def test_parse_legacy_two_element(self, m3u_module):
-        raw = [["http://epg.com", 90]]
-        result = m3u_module.parse_epg_urls(raw)
-        assert result[0] == ("http://epg.com", 90, "")
-
-    def test_parse_legacy_string(self, m3u_module):
-        raw = ["http://epg.com"]
-        result = m3u_module.parse_epg_urls(raw)
-        assert result[0] == ("http://epg.com", 120, "")
-
     def test_parse_tuple_passthrough(self, m3u_module):
         raw = [("http://epg.com", 100, "s1")]
         result = m3u_module.parse_epg_urls(raw)
@@ -119,6 +104,12 @@ class TestParseEpgUrls:
 
     def test_parse_empty(self, m3u_module):
         assert m3u_module.parse_epg_urls([]) == []
+
+    def test_parse_skips_malformed(self, m3u_module):
+        raw = [["http://epg.com", 90], "plain_string", ["http://valid.com", 60, "src"]]
+        result = m3u_module.parse_epg_urls(raw)
+        assert len(result) == 1
+        assert result[0] == ("http://valid.com", 60, "src")
 
 
 class TestFetchLocks:
@@ -129,3 +120,9 @@ class TestFetchLocks:
     def test_get_refresh_in_progress(self, m3u_module):
         rip = m3u_module.get_refresh_in_progress()
         assert isinstance(rip, set)
+
+
+if __name__ == "__main__":
+    from testing import run_tests
+
+    run_tests(__file__)

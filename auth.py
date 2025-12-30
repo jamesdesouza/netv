@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import hashlib
 import hmac
 import json
 import pathlib
 import secrets
 import time
-from typing import Any
 
 
 APP_DIR = pathlib.Path(__file__).parent

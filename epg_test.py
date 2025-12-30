@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC
-from datetime import datetime
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -161,3 +159,9 @@ class TestSanitizeEpgXml:
         assert "<channel" in result
         assert "<programme" in result
         assert '<?xml version="1.0"?>' in result
+
+
+if __name__ == "__main__":
+    from testing import run_tests
+
+    run_tests(__file__)

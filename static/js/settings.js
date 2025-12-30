@@ -324,6 +324,40 @@
     container.querySelectorAll('.setting-input').forEach(el => {
       el.addEventListener('change', saveSettings);
     });
+
+    // Re-detect hardware encoders button
+    const refreshBtn = document.getElementById('refresh-encoders-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', async () => {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'Detecting...';
+        try {
+          const resp = await fetch('/settings/refresh-encoders', { method: 'POST' });
+          if (resp.ok) {
+            const data = await resp.json();
+            const encoders = data.encoders || {};
+            // Update radio button states
+            ['nvidia', 'intel', 'vaapi', 'software'].forEach(hw => {
+              const radio = container.querySelector(`input[name="transcode_hw"][value="${hw}"]`);
+              const label = radio?.closest('label');
+              if (radio && label) {
+                radio.disabled = !encoders[hw];
+                label.classList.toggle('opacity-40', !encoders[hw]);
+              }
+            });
+            refreshBtn.textContent = 'Done!';
+            setTimeout(() => { refreshBtn.textContent = 'Re-detect Hardware'; }, 1500);
+          } else {
+            refreshBtn.textContent = 'Failed';
+            setTimeout(() => { refreshBtn.textContent = 'Re-detect Hardware'; }, 1500);
+          }
+        } catch {
+          refreshBtn.textContent = 'Failed';
+          setTimeout(() => { refreshBtn.textContent = 'Re-detect Hardware'; }, 1500);
+        }
+        refreshBtn.disabled = false;
+      });
+    }
   }
 
   // ============================================================

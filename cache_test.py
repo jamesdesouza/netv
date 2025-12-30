@@ -5,16 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from unittest import mock
 
+import subprocess
+
 import pytest
+
+import cache
 
 
 @pytest.fixture
 def cache_module(tmp_path: Path):
     """Import cache module with temp directories."""
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).parent))
-    import cache
 
     # Patch paths to temp locations
     original_server_settings = cache.SERVER_SETTINGS_FILE
@@ -96,7 +96,7 @@ class TestSettings:
         settings = cache_module.load_server_settings()
         assert settings["sources"] == []
         assert settings["transcode_mode"] == "auto"
-        assert settings["transcode_hw"] in ("nvidia", "vaapi", "qsv", "software")
+        assert settings["transcode_hw"] in ("nvidia", "intel", "vaapi", "software")
         assert settings["probe_movies"] is True
 
     def test_save_and_load_settings(self, cache_module):
@@ -163,7 +163,7 @@ class TestSource:
                 }
             ]
         }
-        cache_module.save_settings(settings)
+        cache_module.save_server_settings(settings)
         sources = cache_module.get_sources()
         assert len(sources) == 1
         assert sources[0].id == "s1"
@@ -173,9 +173,9 @@ class TestSource:
 class TestUpdateSourceEpgUrl:
     def test_update_source_epg_url(self, cache_module):
         settings = {"sources": [{"id": "s1", "name": "S1", "type": "m3u", "url": "http://x"}]}
-        cache_module.save_settings(settings)
+        cache_module.save_server_settings(settings)
         cache_module.update_source_epg_url("s1", "http://epg.example.com")
-        loaded = cache_module.load_settings()
+        loaded = cache_module.load_server_settings()
         assert loaded["sources"][0]["epg_url"] == "http://epg.example.com"
 
     def test_update_source_epg_url_not_overwrite(self, cache_module):
@@ -190,14 +190,235 @@ class TestUpdateSourceEpgUrl:
                 }
             ]
         }
-        cache_module.save_settings(settings)
+        cache_module.save_server_settings(settings)
         cache_module.update_source_epg_url("s1", "http://new")
-        loaded = cache_module.load_settings()
+        loaded = cache_module.load_server_settings()
         assert loaded["sources"][0]["epg_url"] == "http://existing"
 
     def test_update_source_epg_url_empty_noop(self, cache_module):
         settings = {"sources": [{"id": "s1", "name": "S1", "type": "m3u", "url": "http://x"}]}
-        cache_module.save_settings(settings)
+        cache_module.save_server_settings(settings)
         cache_module.update_source_epg_url("s1", "")
-        loaded = cache_module.load_settings()
+        loaded = cache_module.load_server_settings()
         assert "epg_url" not in loaded["sources"][0]
+
+
+class TestEncoderDetection:
+    """Tests for encoder detection functions."""
+
+    def test_test_encoder_success(self):
+        """Test _test_encoder returns (True, '') on successful command."""
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            ok, err = cache._test_encoder(["echo", "test"])
+            assert ok is True
+            assert err == ""
+            mock_run.assert_called_once()
+
+    def test_test_encoder_failure(self):
+        """Test _test_encoder returns (False, error) on non-zero return code."""
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=1, stderr=b"encoder not found")
+            ok, err = cache._test_encoder(["false"])
+            assert ok is False
+            assert "encoder not found" in err
+
+    def test_test_encoder_timeout(self):
+        """Test _test_encoder returns (False, 'timeout') on timeout."""
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd=["test"], timeout=5)
+            ok, err = cache._test_encoder(["sleep", "100"], timeout=5)
+            assert ok is False
+            assert err == "timeout"
+
+    def test_test_encoder_exception(self):
+        """Test _test_encoder returns (False, error) on exception."""
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("ffmpeg not found")
+            ok, err = cache._test_encoder(["nonexistent_command"])
+            assert ok is False
+            assert err == "ffmpeg not found"
+
+    def test_detect_encoders_all_available(self):
+        """Test detect_encoders when all hardware is available."""
+        with mock.patch.object(cache, "_test_encoder", return_value=(True, "")):
+            result = cache.detect_encoders()
+            assert result == {
+                "nvidia": True,
+                "intel": True,
+                "vaapi": True,
+                "software": True,
+            }
+
+    def test_detect_encoders_none_available(self):
+        """Test detect_encoders when no hardware is available."""
+        with mock.patch.object(cache, "_test_encoder", return_value=(False, "not found")):
+            result = cache.detect_encoders()
+            assert result == {
+                "nvidia": False,
+                "intel": False,
+                "vaapi": False,
+                "software": False,
+            }
+
+    def test_detect_encoders_partial(self):
+        """Test detect_encoders with mixed hardware availability."""
+
+        def mock_test(cmd, timeout=5):
+            # Return True only for software (libx264)
+            if "libx264" in cmd:
+                return True, ""
+            return False, "not available"
+
+        with mock.patch.object(cache, "_test_encoder", side_effect=mock_test):
+            result = cache.detect_encoders()
+            assert result["nvidia"] is False
+            assert result["intel"] is False
+            assert result["vaapi"] is False
+            assert result["software"] is True
+
+    def test_detect_encoders_nvidia_only(self):
+        """Test detect_encoders when only NVIDIA is available."""
+
+        def mock_test(cmd, timeout=5):
+            if "h264_nvenc" in cmd:
+                return True, ""
+            return False, "not available"
+
+        with mock.patch.object(cache, "_test_encoder", side_effect=mock_test):
+            result = cache.detect_encoders()
+            assert result["nvidia"] is True
+            assert result["intel"] is False
+            assert result["vaapi"] is False
+            assert result["software"] is False
+
+    def test_detect_encoders_vaapi_command_structure(self):
+        """Test detect_encoders passes correct VAAPI command structure."""
+        captured_cmds = []
+
+        def capture_cmd(cmd, timeout=5):
+            captured_cmds.append(cmd)
+            return False, "test"
+
+        with mock.patch.object(cache, "_test_encoder", side_effect=capture_cmd):
+            cache.detect_encoders()
+
+        # Find VAAPI command
+        vaapi_cmd = [c for c in captured_cmds if "h264_vaapi" in c][0]
+        assert "-vaapi_device" in vaapi_cmd
+        assert "/dev/dri/renderD128" in vaapi_cmd
+        assert "hwupload" in " ".join(vaapi_cmd)
+
+    def test_detect_encoders_intel_command_structure(self):
+        """Test detect_encoders passes correct Intel QSV command structure."""
+        captured_cmds = []
+
+        def capture_cmd(cmd, timeout=5):
+            captured_cmds.append(cmd)
+            return False, "test"
+
+        with mock.patch.object(cache, "_test_encoder", side_effect=capture_cmd):
+            cache.detect_encoders()
+
+        # Find Intel QSV command
+        intel_cmd = [c for c in captured_cmds if "h264_qsv" in c][0]
+        assert "-hwaccel" in intel_cmd
+        assert "qsv" in intel_cmd
+        assert "-hwaccel_output_format" in intel_cmd
+
+    def test_refresh_encoders_updates_global(self):
+        """Test refresh_encoders updates AVAILABLE_ENCODERS."""
+        original = cache.AVAILABLE_ENCODERS.copy()
+
+        with mock.patch.object(
+            cache,
+            "detect_encoders",
+            return_value={"nvidia": True, "intel": True, "vaapi": True, "software": True},
+        ):
+            result = cache.refresh_encoders()
+            assert cache.AVAILABLE_ENCODERS == {
+                "nvidia": True,
+                "intel": True,
+                "vaapi": True,
+                "software": True,
+            }
+            assert result == cache.AVAILABLE_ENCODERS
+
+        # Restore original
+        cache.AVAILABLE_ENCODERS = original
+
+    def test_default_encoder_prefers_nvidia(self):
+        """Test _default_encoder prefers NVIDIA when available."""
+        original = cache.AVAILABLE_ENCODERS.copy()
+        cache.AVAILABLE_ENCODERS = {
+            "nvidia": True,
+            "intel": True,
+            "vaapi": True,
+            "software": True,
+        }
+        try:
+            assert cache._default_encoder() == "nvidia"
+        finally:
+            cache.AVAILABLE_ENCODERS = original
+
+    def test_default_encoder_falls_back_to_intel(self):
+        """Test _default_encoder falls back to Intel when NVIDIA unavailable."""
+        original = cache.AVAILABLE_ENCODERS.copy()
+        cache.AVAILABLE_ENCODERS = {
+            "nvidia": False,
+            "intel": True,
+            "vaapi": True,
+            "software": True,
+        }
+        try:
+            assert cache._default_encoder() == "intel"
+        finally:
+            cache.AVAILABLE_ENCODERS = original
+
+    def test_default_encoder_falls_back_to_vaapi(self):
+        """Test _default_encoder falls back to VAAPI when NVIDIA/Intel unavailable."""
+        original = cache.AVAILABLE_ENCODERS.copy()
+        cache.AVAILABLE_ENCODERS = {
+            "nvidia": False,
+            "intel": False,
+            "vaapi": True,
+            "software": True,
+        }
+        try:
+            assert cache._default_encoder() == "vaapi"
+        finally:
+            cache.AVAILABLE_ENCODERS = original
+
+    def test_default_encoder_falls_back_to_software(self):
+        """Test _default_encoder falls back to software as last resort."""
+        original = cache.AVAILABLE_ENCODERS.copy()
+        cache.AVAILABLE_ENCODERS = {
+            "nvidia": False,
+            "intel": False,
+            "vaapi": False,
+            "software": True,
+        }
+        try:
+            assert cache._default_encoder() == "software"
+        finally:
+            cache.AVAILABLE_ENCODERS = original
+
+    def test_default_encoder_returns_software_when_none_available(self):
+        """Test _default_encoder returns software even when nothing works."""
+        original = cache.AVAILABLE_ENCODERS.copy()
+        cache.AVAILABLE_ENCODERS = {
+            "nvidia": False,
+            "intel": False,
+            "vaapi": False,
+            "software": False,
+        }
+        try:
+            assert cache._default_encoder() == "software"
+        finally:
+            cache.AVAILABLE_ENCODERS = original
+
+
+if __name__ == "__main__":
+    from testing import run_tests
+
+    run_tests(__file__)

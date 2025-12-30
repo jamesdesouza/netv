@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
 import sqlite3
 import threading
-from dataclasses import dataclass
-from datetime import UTC
-from datetime import datetime
-from pathlib import Path
 
 
 @dataclass(slots=True)

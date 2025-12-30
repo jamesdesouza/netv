@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import urllib.error
 from pathlib import Path
+
+import urllib.error
 
 import pytest
 
@@ -97,3 +98,9 @@ class TestSafeRedirectHandler:
                 headers={},
                 newurl="javascript:alert(1)",
             )
+
+
+if __name__ == "__main__":
+    from testing import run_tests
+
+    run_tests(__file__)

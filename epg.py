@@ -2,24 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
+
 import contextlib
 import gzip
 import logging
 import re
 import time
-from dataclasses import dataclass
-from dataclasses import field
-from datetime import UTC
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
-from pathlib import Path
 
 import defusedxml.ElementTree as ET  # Safe XML parsing
 
-import epg_db
 from epg_db import Program
 from util import safe_urlopen
+
+import epg_db
 
 
 log = logging.getLogger(__name__)

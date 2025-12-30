@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import sys
 
 import pytest
 
@@ -723,3 +723,9 @@ class TestRefreshStatus:
 
         resp = auth_client.get("/settings/refresh-status")
         assert resp.status_code == 200
+
+
+if __name__ == "__main__":
+    from testing import run_tests
+
+    run_tests(__file__)

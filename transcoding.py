@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import dataclass
+from typing import Any, Literal
+
 import asyncio
 import json
 import logging
@@ -13,12 +18,16 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable
-from contextlib import suppress
-from dataclasses import dataclass
-from typing import Any
 
 from fastapi import HTTPException
+
+
+HwAccel = Literal[
+    "nvidia",
+    "intel",
+    "vaapi",
+    "software",
+]
 
 
 log = logging.getLogger(__name__)
@@ -117,7 +126,10 @@ def _get_gpu_nvdec_codecs() -> set[str]:
             codec for codec, min_cap in _NVDEC_MIN_COMPUTE.items() if compute_cap >= min_cap
         }
         log.info(
-            "GPU: %s (compute %.1f) NVDEC: %s", gpu_name, compute_cap, _gpu_nvdec_codecs or "none"
+            "GPU: %s (compute %.1f) NVDEC: %s",
+            gpu_name,
+            compute_cap,
+            _gpu_nvdec_codecs or "none",
         )
     except Exception as e:
         log.debug("GPU probe failed: %s", e)
@@ -199,7 +211,14 @@ def _save_series_probe_cache() -> None:
                     "duration": media_info.duration,
                     "height": media_info.height,
                     "video_bitrate": media_info.video_bitrate,
-                    "subtitles": [{"index": s.index, "lang": s.lang, "name": s.name} for s in subs],
+                    "subtitles": [
+                        {
+                            "index": s.index,
+                            "lang": s.lang,
+                            "name": s.name,
+                        }
+                        for s in subs
+                    ],
                 }
     try:
         _SERIES_PROBE_CACHE_FILE.write_text(json.dumps(data, indent=2))
@@ -339,7 +358,11 @@ def invalidate_series_probe_cache(series_id: int, episode_id: int | None = None)
             episodes = series_data.get("episodes", {})
             if episode_id in episodes:
                 del episodes[episode_id]
-                log.info("Cleared probe cache for series=%d episode=%d", series_id, episode_id)
+                log.info(
+                    "Cleared probe cache for series=%d episode=%d",
+                    series_id,
+                    episode_id,
+                )
     _save_series_probe_cache()
 
 
@@ -363,7 +386,11 @@ def probe_media(
                     if time.time() - cache_time < _SERIES_PROBE_CACHE_TTL_SEC:
                         # Update MRU to this episode
                         series_data["mru"] = episode_id
-                        log.info("Probe cache hit for series=%d episode=%d", series_id, episode_id)
+                        log.info(
+                            "Probe cache hit for series=%d episode=%d",
+                            series_id,
+                            episode_id,
+                        )
                         return media_info, subtitles
                 # Fall back to MRU if set
                 if mru_eid is not None and mru_eid in episodes:
@@ -506,14 +533,6 @@ def probe_media(
     return media_info, subtitles
 
 
-def _get_thread_count(copy_video: bool, is_vod: bool, hw: str) -> str:
-    if copy_video:
-        return "2"
-    if is_vod:
-        return "3" if hw == "nvidia" else "2"
-    return "4"
-
-
 _MAX_RES_HEIGHT: dict[str, int] = {
     "4k": 2160,
     "1080p": 1080,
@@ -537,200 +556,94 @@ _QUALITY_CRF: dict[str, int] = {
 
 
 def _build_video_args(
-    cmd: list[str],
+    *,
     copy_video: bool,
-    hw: str,
-    is_vod: bool,
-    use_full_cuda: bool,
+    hw: HwAccel,
+    deinterlace: bool,
+    use_hw_pipeline: bool,
     max_resolution: str,
     quality: str,
-) -> None:
+) -> tuple[list[str], list[str]]:
+    """Build video args. Returns (pre_input_args, post_input_args)."""
     if copy_video:
-        cmd.extend(["-c:v", "copy"])
-        return
+        return [], ["-c:v", "copy"]
 
-    # Build scale filter if max_resolution is set (scale down only, preserve aspect)
+    # Height expr for scale filter (scale down only, -2 keeps width divisible by 2)
     max_h = _MAX_RES_HEIGHT.get(max_resolution)
-    # scale='min(iw,ih*16/9)':min(ih,MAX_H) - but simpler: scale=-2:MIN(ih,MAX_H)
-    # Using -2 keeps width divisible by 2, and min() only scales down
-    scale_expr = f"'min(ih,{max_h})'" if max_h else None
+    h = f"'min(ih,{max_h})'" if max_h else None
     qp = _QUALITY_QP.get(quality, 28)
 
     if hw == "nvidia":
-        if use_full_cuda:
-            if is_vod:
-                if scale_expr:
-                    cmd.extend(
-                        [
-                            "-vf",
-                            f"scale_cuda=-2:{scale_expr}:format=nv12",
-                        ]
-                    )
-                else:
-                    cmd.extend(["-vf", "scale_cuda=format=nv12"])
-            else:
-                if scale_expr:
-                    cmd.extend(
-                        [
-                            "-vf",
-                            f"yadif_cuda=1,scale_cuda=-2:{scale_expr}:format=nv12",
-                        ]
-                    )
-                else:
-                    cmd.extend(
-                        [
-                            "-vf",
-                            "yadif_cuda=1,scale_cuda=format=nv12",
-                        ]
-                    )
-        elif is_vod:
-            if scale_expr:
-                cmd.extend(
-                    [
-                        "-vf",
-                        f"scale=-2:{scale_expr},format=nv12",
-                    ]
-                )
-            else:
-                cmd.extend(
-                    [
-                        "-vf",
-                        "format=nv12",
-                    ]
-                )
-        else:
-            if scale_expr:
-                cmd.extend(
-                    [
-                        "-vf",
-                        f"yadif=1,scale=-2:{scale_expr}",
-                    ]
-                )
-            else:
-                cmd.extend(["-vf", "yadif=1"])
-        preset = "p2" if is_vod else "p4"
-        cmd.extend(
-            [
-                "-c:v",
-                "h264_nvenc",
-                "-preset",
-                preset,
-                "-rc",
-                "constqp",
-                "-qp",
-                str(qp),
-                "-g",
-                "60",
+        if use_hw_pipeline:
+            pre = [
+                "-hwaccel",
+                "cuda",
+                "-hwaccel_output_format",
+                "cuda",
+                "-extra_hw_frames",
+                "3",
             ]
-        )
+            scale = f"scale_cuda=-2:{h}:format=nv12" if h else "scale_cuda=format=nv12"
+            vf = f"yadif_cuda=1,{scale}" if deinterlace else scale
+        else:
+            pre = []
+            if deinterlace:
+                vf = f"yadif=1,scale=-2:{h}" if h else "yadif=1"
+            else:
+                vf = f"scale=-2:{h},format=nv12" if h else "format=nv12"
+        preset = "p4" if deinterlace else "p2"
+        encoder = "h264_nvenc"
+        enc_opts = ["-preset", preset, "-rc", "constqp", "-qp", str(qp)]
+
     elif hw == "vaapi":
-        if is_vod:
-            if scale_expr:
-                vf = f"scale=-2:{scale_expr},format=nv12,hwupload"
-            else:
-                vf = "format=nv12,hwupload"
-        else:
-            if scale_expr:
-                vf = f"yadif=1,scale=-2:{scale_expr},format=nv12,hwupload"
-            else:
-                vf = "yadif=1,format=nv12,hwupload"
-        cmd.extend(
-            [
-                "-vf",
-                vf,
-                "-vaapi_device",
-                "/dev/dri/renderD128",
-                "-c:v",
-                "h264_vaapi",
-                "-rc_mode",
-                "CQP",
-                "-qp",
-                str(qp),
-                "-g",
-                "60",
-            ]
-        )
-    elif hw == "qsv":
-        if is_vod:
-            if scale_expr:
-                vf = f"scale=-2:{scale_expr},format=nv12"
-            else:
-                vf = "format=nv12"
-        else:
-            if scale_expr:
-                vf = f"yadif=1,scale=-2:{scale_expr},format=nv12"
-            else:
-                vf = "yadif=1,format=nv12"
-        cmd.extend(
-            [
-                "-vf",
-                vf,
-                "-c:v",
-                "h264_qsv",
-                "-preset",
-                "medium",
-                "-global_quality",
-                str(qp),
-                "-g",
-                "60",
-            ]
-        )
-    else:
-        if is_vod:
-            if scale_expr:
-                vf = f"scale=-2:{scale_expr},format=yuv420p"
-            else:
-                vf = "format=yuv420p"
-        else:
-            if scale_expr:
-                vf = f"yadif=1,scale=-2:{scale_expr}"
-            else:
-                vf = "yadif=1"
-        crf = _QUALITY_CRF.get(quality, 26)
-        cmd.extend(
-            [
-                "-vf",
-                vf,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                str(crf),
-                "-g",
-                "60",
-            ]
-        )
-
-
-def _build_audio_args(
-    cmd: list[str],
-    copy_audio: bool,
-    media_info: MediaInfo | None,
-) -> None:
-    if copy_audio:
-        cmd.extend(["-c:a", "copy"])
-        return
-    sample_rate = "48000"
-    if media_info and media_info.audio_sample_rate in (44100, 48000):
-        sample_rate = str(media_info.audio_sample_rate)
-    cmd.extend(
-        [
-            "-c:a",
-            "aac",
-            "-ac",
-            "2",
-            "-ar",
-            sample_rate,
-            "-b:a",
-            "192k",
+        pre = [
+            "-hwaccel",
+            "vaapi",
+            "-hwaccel_output_format",
+            "vaapi",
+            "-hwaccel_device",
+            "/dev/dri/renderD128",
         ]
-    )
+        scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
+        vf = f"deinterlace_vaapi,{scale}" if deinterlace else scale
+        encoder = "h264_vaapi"
+        enc_opts = ["-rc_mode", "CQP", "-qp", str(qp)]
+
+    elif hw == "intel":
+        pre = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
+        scale = f"scale_qsv=w=-2:h={h}:format=nv12" if h else "scale_qsv=format=nv12"
+        vf = f"vpp_qsv=deinterlace=2,{scale}" if deinterlace else scale
+        encoder = "h264_qsv"
+        enc_opts = ["-preset", "medium", "-global_quality", str(qp)]
+
+    elif hw == "software":
+        pre = []
+        if deinterlace:
+            vf = f"yadif=1,scale=-2:{h}" if h else "yadif=1"
+        else:
+            vf = f"scale=-2:{h},format=yuv420p" if h else "format=yuv420p"
+        crf = _QUALITY_CRF.get(quality, 26)
+        encoder = "libx264"
+        enc_opts = ["-preset", "veryfast", "-crf", str(crf)]
+
+    else:
+        raise ValueError(f"Unrecognized hardware: '{hw}'.")
+
+    post = ["-vf", vf, "-c:v", encoder, *enc_opts, "-g", "60"]
+    return pre, post
+
+
+def _build_audio_args(*, copy_audio: bool, audio_sample_rate: int) -> list[str]:
+    """Build audio args."""
+    if copy_audio:
+        return ["-c:a", "copy"]
+    rate = str(audio_sample_rate) if audio_sample_rate in (44100, 48000) else "48000"
+    return ["-c:a", "aac", "-ac", "2", "-ar", rate, "-b:a", "192k"]
 
 
 def build_hls_ffmpeg_cmd(
     input_url: str,
-    hw: str,
+    hw: HwAccel,
     output_dir: str,
     is_vod: bool = False,
     subtitles: list[SubtitleStream] | None = None,
@@ -739,16 +652,15 @@ def build_hls_ffmpeg_cmd(
     quality: str = "high",
     user_agent: str | None = None,
 ) -> list[str]:
-    # Check if we need to scale down
+    # Check if we can copy streams directly (VOD with compatible codecs)
     max_h = _MAX_RES_HEIGHT.get(max_resolution, 9999)
     needs_scale = media_info and media_info.height > max_h
-
     copy_video = bool(
         is_vod
         and media_info
         and media_info.video_codec == "h264"
         and media_info.pix_fmt == "yuv420p"
-        and not needs_scale  # Can't copy if we need to scale down
+        and not needs_scale
     )
     copy_audio = bool(
         is_vod
@@ -757,62 +669,66 @@ def build_hls_ffmpeg_cmd(
         and media_info.audio_channels <= 2
         and media_info.audio_sample_rate in (44100, 48000)
     )
-    # Full CUDA pipeline (hwaccel decode + GPU filter + nvenc) if GPU supports the codec
-    use_full_cuda = bool(
-        hw == "nvidia"
-        and not copy_video
-        and media_info
-        and media_info.video_codec in _get_gpu_nvdec_codecs()
+
+    # Full hardware pipeline if GPU supports the codec
+    use_hw_pipeline = bool(
+        not copy_video
+        and hw in ("nvidia", "intel", "vaapi")
+        and (hw != "nvidia" or (media_info and media_info.video_codec in _get_gpu_nvdec_codecs()))
     )
 
+    # Build component arg lists
+    video_pre, video_post = _build_video_args(
+        copy_video=copy_video,
+        hw=hw,
+        deinterlace=not is_vod,
+        use_hw_pipeline=use_hw_pipeline,
+        max_resolution=max_resolution,
+        quality=quality,
+    )
+    audio_args = _build_audio_args(
+        copy_audio=copy_audio,
+        audio_sample_rate=media_info.audio_sample_rate if media_info else 0,
+    )
+
+    # Base args
     cmd = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
         "error",
         "-noautorotate",
-        "-threads",
-        _get_thread_count(copy_video, is_vod, hw),
     ]
 
-    if use_full_cuda:
-        cmd.extend(
-            [
-                "-hwaccel",
-                "cuda",
-                "-hwaccel_output_format",
-                "cuda",
-                "-extra_hw_frames",
-                "3",
-            ]
-        )
+    # Hwaccel args (before -i)
+    cmd.extend(video_pre)
 
+    # Probe args (when no media_info)
     if media_info is None:
-        cmd.extend(
-            [
-                "-probesize",
-                "50000" if is_vod else "5000000",
-                "-analyzeduration",
-                "500000" if is_vod else "5000000",
-            ]
-        )
-    input_opts = [
-        "-fflags",
-        "+discardcorrupt+genpts",
-        "-err_detect",
-        "ignore_err",
-        "-reconnect",
-        "1",
-        "-reconnect_streamed",
-        "1",
-        "-reconnect_delay_max",
-        "2",
-    ]
-    if user_agent:
-        input_opts.extend(["-user_agent", user_agent])
-    input_opts.extend(["-i", input_url])
-    cmd.extend(input_opts)
+        probe_size = "50000" if is_vod else "5000000"
+        analyze_dur = "500000" if is_vod else "5000000"
+        cmd.extend(["-probesize", probe_size, "-analyzeduration", analyze_dur])
 
+    # Input args
+    cmd.extend(
+        [
+            "-fflags",
+            "+discardcorrupt+genpts",
+            "-err_detect",
+            "ignore_err",
+            "-reconnect",
+            "1",
+            "-reconnect_streamed",
+            "1",
+            "-reconnect_delay_max",
+            "2",
+        ]
+    )
+    if user_agent:
+        cmd.extend(["-user_agent", user_agent])
+    cmd.extend(["-i", input_url])
+
+    # Subtitle extraction
     for i, sub in enumerate(subtitles or []):
         cmd.extend(
             [
@@ -826,18 +742,12 @@ def build_hls_ffmpeg_cmd(
             ]
         )
 
+    # Stream mapping + video + audio
     cmd.extend(["-map", "0:v:0", "-map", "0:a:0"])
-    _build_video_args(
-        cmd,
-        copy_video,
-        hw,
-        is_vod,
-        use_full_cuda,
-        max_resolution,
-        quality,
-    )
-    _build_audio_args(cmd, copy_audio, media_info)
+    cmd.extend(video_post)
+    cmd.extend(audio_args)
 
+    # HLS output args
     cmd.extend(
         [
             "-max_delay",
@@ -852,7 +762,6 @@ def build_hls_ffmpeg_cmd(
             f"{output_dir}/seg%03d.ts",
         ]
     )
-
     if is_vod:
         cmd.extend(
             [
@@ -868,7 +777,6 @@ def build_hls_ffmpeg_cmd(
         cmd.extend(["-hls_flags", "delete_segments"])
 
     cmd.append(f"{output_dir}/stream.m3u8")
-
     return cmd
 
 
@@ -945,7 +853,7 @@ def cleanup_expired_vod_sessions() -> None:
 def recover_vod_sessions() -> None:
     cache_timeout = get_vod_cache_timeout()
     now = time.time()
-    for d in pathlib.Path("/tmp").glob("netv_transcode_*"):
+    for d in pathlib.Path(tempfile.gettempdir()).glob("netv_transcode_*"):
         if not d.is_dir():
             continue
         info_file = d / "session.json"
@@ -1207,7 +1115,7 @@ def _update_session_process(session_id: str, process: Any) -> bool:
 async def _handle_existing_vod_session(
     existing_id: str,
     url: str,
-    hw: str,
+    hw: HwAccel,
     do_probe: bool,
     max_resolution: str = "1080p",
     quality: str = "high",

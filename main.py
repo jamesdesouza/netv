@@ -22,6 +22,13 @@ Examples:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any
+from xml.sax.saxutils import escape as xml_escape
+
 import asyncio
 import concurrent.futures
 import contextlib
@@ -36,65 +43,51 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from datetime import UTC
-from datetime import datetime
-from datetime import timedelta
-from typing import Annotated
-from typing import Any
-from xml.sax.saxutils import escape as xml_escape
 
-from fastapi import Depends
-from fastapi import FastAPI
-from fastapi import Form
-from fastapi import HTTPException
-from fastapi import Request
-from fastapi.responses import FileResponse
-from fastapi.responses import HTMLResponse
-from fastapi.responses import RedirectResponse
-from fastapi.responses import Response
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.responses import StreamingResponse
 
+from auth import create_token, verify_password, verify_token
+from cache import (
+    AVAILABLE_ENCODERS,
+    CACHE_DIR,
+    Source,
+    clear_all_caches,
+    get_cache,
+    get_cache_lock,
+    get_cached_info,
+    get_sources,
+    get_watch_position,
+    load_file_cache,
+    load_server_settings,
+    load_user_settings,
+    refresh_encoders,
+    save_file_cache,
+    save_server_settings,
+    save_user_settings,
+    save_watch_position,
+    update_source_epg_url,
+)
+from epg import fetch_epg
+from m3u import (
+    fetch_m3u,
+    fetch_source_live_data,
+    fetch_source_vod_data,
+    get_first_xtream_client,
+    get_refresh_in_progress,
+    load_all_live_data,
+    load_series_data,
+    load_vod_data,
+    parse_epg_urls,
+)
+from xtream import XtreamClient
+
 import auth
 import epg_db
 import transcoding
-from auth import create_token
-from auth import verify_password
-from auth import verify_token
-from cache import AVAILABLE_ENCODERS
-from cache import CACHE_DIR
-from cache import Source
-from cache import clear_all_caches
-from cache import get_cache
-from cache import get_cache_lock
-from cache import get_cached_info
-from cache import get_sources
-from cache import get_watch_position
-from cache import load_file_cache
-from cache import load_server_settings
-from cache import load_settings
-from cache import load_user_settings
-from cache import save_file_cache
-from cache import save_server_settings
-from cache import save_settings
-from cache import save_user_settings
-from cache import save_watch_position
-from cache import update_source_epg_url
-from epg import fetch_epg
-from m3u import fetch_m3u
-from m3u import fetch_source_live_data
-from m3u import fetch_source_vod_data
-from m3u import get_first_xtream_client
-from m3u import get_refresh_in_progress
-from m3u import load_all_live_data
-from m3u import load_series_data
-from m3u import load_vod_data
-from m3u import parse_epg_urls
-from xtream import XtreamClient
 
 
 log = logging.getLogger()
@@ -139,7 +132,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     epg_db.init(CACHE_DIR)
 
     # Initialize transcoding module with settings callback
-    transcoding.init(load_settings)
+    transcoding.init(load_server_settings)
 
     # Kill orphaned ffmpeg processes
     try:
@@ -322,7 +315,7 @@ async def setup_page(request: Request):
     """Initial setup page - create first admin user."""
     if not auth.is_setup_required():
         return RedirectResponse("/login", status_code=303)
-    return TEMPLATES.TemplateResponse("setup.html", {"request": request, "error": None})
+    return TEMPLATES.TemplateResponse(request, "setup.html", {"error": None})
 
 
 @app.post("/setup")
@@ -338,17 +331,15 @@ async def setup_create_user(
     # Validate
     if len(username) < 3:
         return TEMPLATES.TemplateResponse(
-            "setup.html",
-            {"request": request, "error": "Username must be at least 3 characters"},
+            request, "setup.html", {"error": "Username must be at least 3 characters"}
         )
     if len(password) < 8:
         return TEMPLATES.TemplateResponse(
-            "setup.html",
-            {"request": request, "error": "Password must be at least 8 characters"},
+            request, "setup.html", {"error": "Password must be at least 8 characters"}
         )
     if password != confirm:
         return TEMPLATES.TemplateResponse(
-            "setup.html", {"request": request, "error": "Passwords do not match"}
+            request, "setup.html", {"error": "Passwords do not match"}
         )
     auth.create_user(username, password)
     return RedirectResponse("/login", status_code=303)
@@ -361,7 +352,7 @@ async def login_page(request: Request, error: str | None = None):
         return RedirectResponse("/setup", status_code=303)
     last_user = request.cookies.get("last_user", "")
     return TEMPLATES.TemplateResponse(
-        "login.html", {"request": request, "error": error, "last_user": last_user}
+        request, "login.html", {"error": error, "last_user": last_user}
     )
 
 
@@ -563,9 +554,9 @@ async def guide_page(
             # No cache at all - start background load and show loading page
             _start_guide_background_load()
             return TEMPLATES.TemplateResponse(
+                request,
                 "guide.html",
                 {
-                    "request": request,
                     "grid_data": [],
                     "selected_cats": [],
                     "cats_param": cats,
@@ -697,9 +688,9 @@ async def guide_page(
         )
 
     return TEMPLATES.TemplateResponse(
+        request,
         "guide.html",
         {
-            "request": request,
             "categories": categories,
             "selected_cats": selected_cats,
             "cats_param": cats,
@@ -756,9 +747,9 @@ async def vod_page(
             username = user.get("sub", "")
             user_settings = load_user_settings(username)
             return TEMPLATES.TemplateResponse(
+                request,
                 "vod.html",
                 {
-                    "request": request,
                     "categories": [],
                     "streams": [],
                     "current_category": category,
@@ -784,9 +775,9 @@ async def vod_page(
     username = user.get("sub", "")
     user_settings = load_user_settings(username)
     return TEMPLATES.TemplateResponse(
+        request,
         "vod.html",
         {
-            "request": request,
             "categories": _cache["vod_categories"],
             "streams": streams,
             "current_category": category,
@@ -836,9 +827,9 @@ async def series_page(
             username = user.get("sub", "")
             user_settings = load_user_settings(username)
             return TEMPLATES.TemplateResponse(
+                request,
                 "series.html",
                 {
-                    "request": request,
                     "categories": [],
                     "series": [],
                     "current_category": category,
@@ -864,9 +855,9 @@ async def series_page(
     username = user.get("sub", "")
     user_settings = load_user_settings(username)
     return TEMPLATES.TemplateResponse(
+        request,
         "series.html",
         {
-            "request": request,
             "categories": _cache["series_categories"],
             "series": series,
             "current_category": category,
@@ -893,9 +884,9 @@ async def series_detail_page(
         )
     except (urllib.error.URLError, TimeoutError) as e:
         return TEMPLATES.TemplateResponse(
+            request,
             "error.html",
             {
-                "request": request,
                 "title": "Provider Error",
                 "message": f"Failed to load series info: {e}",
             },
@@ -946,9 +937,9 @@ async def series_detail_page(
     username = user.get("sub", "")
     user_settings = load_user_settings(username)
     return TEMPLATES.TemplateResponse(
+        request,
         "series_detail.html",
         {
-            "request": request,
             "series": series_data,
             "series_id": series_id,
             "favorites": user_settings.get("favorites", {"series": {}, "movies": {}}),
@@ -999,9 +990,9 @@ async def movie_detail_page(
     username = user.get("sub", "")
     user_settings = load_user_settings(username)
     return TEMPLATES.TemplateResponse(
+        request,
         "movie_detail.html",
         {
-            "request": request,
             "movie": movie,
             "favorites": user_settings.get("favorites", {"series": {}, "movies": {}}),
         },
@@ -1205,9 +1196,9 @@ async def player_page(
         series_name = re.sub(r"\s*\(\d{4}\)$", "", info.channel_name)
 
     return TEMPLATES.TemplateResponse(
+        request,
         "player.html",
         {
-            "request": request,
             "raw_url": info.url,
             "transcode_mode": transcode_mode,
             "stream_type": stream_type,
@@ -1302,9 +1293,9 @@ async def search_page(
     username = user.get("sub", "")
     user_settings = load_user_settings(username)
     return TEMPLATES.TemplateResponse(
+        request,
         "search.html",
         {
-            "request": request,
             "query": q,
             "results": results,
             "regex": regex,
@@ -1505,9 +1496,9 @@ async def settings_page(request: Request, user: Annotated[dict, Depends(require_
             # No cache - start background load
             _start_guide_background_load()
     return TEMPLATES.TemplateResponse(
+        request,
         "settings.html",
         {
-            "request": request,
             # Server settings
             "sources": server_settings.get("sources", []),
             "transcode_mode": server_settings.get("transcode_mode", "auto"),
@@ -1578,7 +1569,7 @@ async def settings_add_source(
         if t and re.match(r"^\d{1,2}:\d{2}$", t):
             schedule_list.append(t.zfill(5))
 
-    settings = load_settings()
+    settings = load_server_settings()
     sources = settings.get("sources", [])
     source_id = f"src_{int(time.time())}_{len(sources)}"
     sources.append(
@@ -1595,7 +1586,7 @@ async def settings_add_source(
         }
     )
     settings["sources"] = sources
-    save_settings(settings)
+    save_server_settings(settings)
     clear_all_caches()
     return RedirectResponse("/settings", status_code=303)
 
@@ -1630,7 +1621,7 @@ async def settings_edit_source(
         if t and re.match(r"^\d{1,2}:\d{2}$", t):
             schedule_list.append(t.zfill(5))  # Normalize to HH:MM
 
-    settings = load_settings()
+    settings = load_server_settings()
     for s in settings.get("sources", []):
         if s["id"] == source_id:
             s["name"] = name
@@ -1643,7 +1634,7 @@ async def settings_edit_source(
             s["epg_enabled"] = epg_enabled == "on" or source_type == "epg"
             s["epg_url"] = epg_url.strip()
             break
-    save_settings(settings)
+    save_server_settings(settings)
     clear_all_caches()
     return RedirectResponse("/settings", status_code=303)
 
@@ -1653,9 +1644,9 @@ async def settings_delete_source(
     source_id: str,
     _user: Annotated[dict, Depends(require_admin)],
 ):
-    settings = load_settings()
+    settings = load_server_settings()
     settings["sources"] = [s for s in settings.get("sources", []) if s["id"] != source_id]
-    save_settings(settings)
+    save_server_settings(settings)
     clear_all_caches()
     return RedirectResponse("/settings", status_code=303)
 
@@ -1935,6 +1926,15 @@ async def settings_transcode(
     return {"ok": True}
 
 
+@app.post("/settings/refresh-encoders")
+async def settings_refresh_encoders(
+    _user: Annotated[dict, Depends(require_admin)],
+):
+    """Re-detect available hardware encoders."""
+    encoders = refresh_encoders()
+    return {"ok": True, "encoders": encoders}
+
+
 @app.post("/settings/user-agent")
 async def settings_user_agent(
     _user: Annotated[dict, Depends(require_admin)],
@@ -2015,7 +2015,7 @@ async def clear_series_probe_cache(
 
 @app.get("/api/settings")
 async def get_settings_api(_user: Annotated[dict, Depends(require_auth)]):
-    return load_settings()
+    return load_server_settings()
 
 
 @app.post("/api/settings")
@@ -2034,11 +2034,11 @@ async def update_settings_api(
         "vod_order",
         "series_order",
     }
-    settings = load_settings()
+    settings = load_server_settings()
     for key in allowed_keys:
         if key in data:
             settings[key] = data[key]
-    save_settings(settings)
+    save_server_settings(settings)
     return {"status": "ok"}
 
 
@@ -2216,6 +2216,7 @@ if __name__ == "__main__":
         port=args.port,
         access_log=args.debug,
         log_level=uv_log,
+        log_config=None,  # preserve our basicConfig
         timeout_graceful_shutdown=5,
         **ssl_args,  # pyright: ignore[reportArgumentType]
     )

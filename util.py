@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
 
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):

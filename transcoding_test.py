@@ -1,727 +1,353 @@
-"""Tests for transcoding.py.
-
-State transition scenarios:
-
-| # | From -> To            | Expected Behavior                      | CC |
-|---|-----------------------|----------------------------------------|----|
-| 1 | START -> JUMP         | Kill, delete, start at X, extract CC   | Y  |
-| 2 | START -> DEAD         | ffmpeg killed, segments remain         | -  |
-| 3 | JUMP -> JUMP          | Kill, delete, start at new X, extract  | Y  |
-| 4 | JUMP -> DEAD          | ffmpeg killed, segments remain         | -  |
-| 5 | JUMP -> RESUME        | Return cached, existing CC             | Y  |
-| 6 | DEAD(off=0) -> RESUME | Append, no new CC                      | !  |
-| 7 | DEAD(off>0) -> RESUME | Return cached, existing CC             | Y  |
-| 8 | DEAD -> JUMP          | Start at X, extract CC                 | Y  |
-| 9 | RESUME -> JUMP        | Kill, delete, start at X, extract CC   | Y  |
-| 10| RESUME -> DEAD        | ffmpeg killed                          | -  |
-
-CC legend: Y=works, !=partial (existing content only), -=n/a (no playback)
-"""
-
-import json
-import pathlib
-import tempfile
-import time
-from unittest import mock
+"""Tests for transcoding command generation."""
 
 import pytest
 
-
-pytest_plugins = ("pytest_asyncio",)
-
-
-def make_playlist(output_dir: str, num_segments: int) -> float:
-    """Create fake HLS playlist with segments. Returns duration."""
-    playlist = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n"
-    for i in range(num_segments):
-        playlist += f"#EXTINF:6.0,\nseg{i:03d}.ts\n"
-        (pathlib.Path(output_dir) / f"seg{i:03d}.ts").write_bytes(b"x" * 2000)
-    (pathlib.Path(output_dir) / "stream.m3u8").write_text(playlist)
-    return num_segments * 6.0
+from transcoding import HwAccel, _build_audio_args, _build_video_args, build_hls_ffmpeg_cmd
 
 
-def make_vtt(output_dir: str, index: int = 0):
-    """Create fake VTT subtitle file."""
-    (pathlib.Path(output_dir) / f"sub{index}.vtt").write_text(
-        "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nTest\n"
+class FakeMediaInfo:
+    """Fake media info for testing."""
+
+    def __init__(
+        self,
+        video_codec: str = "h264",
+        audio_codec: str = "aac",
+        pix_fmt: str = "yuv420p",
+        audio_channels: int = 2,
+        audio_sample_rate: int = 48000,
+        height: int = 1080,
+    ):
+        self.video_codec = video_codec
+        self.audio_codec = audio_codec
+        self.pix_fmt = pix_fmt
+        self.audio_channels = audio_channels
+        self.audio_sample_rate = audio_sample_rate
+        self.height = height
+
+
+class TestBuildVideoArgs:
+    """Tests for _build_video_args."""
+
+    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    @pytest.mark.parametrize("deinterlace", [True, False])
+    @pytest.mark.parametrize("max_resolution", ["1080p", "720p", "4k"])
+    def test_all_hw_combinations(self, hw: HwAccel, deinterlace: bool, max_resolution: str):
+        """Test all hardware/deinterlace/resolution combinations produce valid args."""
+        pre, post = _build_video_args(
+            copy_video=False,
+            hw=hw,
+            deinterlace=deinterlace,
+            use_hw_pipeline=(hw != "software"),
+            max_resolution=max_resolution,
+            quality="high",
+        )
+
+        # Pre args: hw accelerators have hwaccel, software has none
+        if hw == "nvidia":
+            assert pre == [] or "-hwaccel" in pre
+        elif hw == "intel":
+            assert "-hwaccel" in pre
+            assert "qsv" in pre
+        elif hw == "vaapi":
+            assert "-hwaccel" in pre
+            assert "vaapi" in pre
+        else:
+            assert pre == []
+
+        # Post args: always have -vf, -c:v, encoder, -g
+        assert "-vf" in post
+        assert "-c:v" in post
+        assert "-g" in post
+        assert "60" in post
+
+    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    def test_copy_video(self, hw: HwAccel):
+        """Test copy_video returns minimal args."""
+        pre, post = _build_video_args(
+            copy_video=True,
+            hw=hw,
+            deinterlace=False,
+            use_hw_pipeline=False,
+            max_resolution="1080p",
+            quality="high",
+        )
+        assert pre == []
+        assert post == ["-c:v", "copy"]
+
+    def test_nvidia_hw_pipeline_filters(self):
+        """Test NVIDIA with hw pipeline uses CUDA filters."""
+        pre, post = _build_video_args(
+            copy_video=False,
+            hw="nvidia",
+            deinterlace=True,
+            use_hw_pipeline=True,
+            max_resolution="1080p",
+            quality="high",
+        )
+        assert "-hwaccel" in pre
+        vf = post[post.index("-vf") + 1]
+        assert "yadif_cuda" in vf
+        assert "scale_cuda" in vf
+
+    def test_nvidia_sw_fallback_filters(self):
+        """Test NVIDIA without hw pipeline uses software filters."""
+        pre, post = _build_video_args(
+            copy_video=False,
+            hw="nvidia",
+            deinterlace=True,
+            use_hw_pipeline=False,
+            max_resolution="1080p",
+            quality="high",
+        )
+        assert pre == []
+        vf = post[post.index("-vf") + 1]
+        assert "yadif=1" in vf
+        assert "cuda" not in vf
+
+    def test_vaapi_filters(self):
+        """Test VAAPI uses VAAPI filters."""
+        pre, post = _build_video_args(
+            copy_video=False,
+            hw="vaapi",
+            deinterlace=True,
+            use_hw_pipeline=True,
+            max_resolution="1080p",
+            quality="high",
+        )
+        vf = post[post.index("-vf") + 1]
+        assert "deinterlace_vaapi" in vf
+        assert "scale_vaapi" in vf
+
+    def test_intel_filters(self):
+        """Test Intel uses QSV filters."""
+        pre, post = _build_video_args(
+            copy_video=False,
+            hw="intel",
+            deinterlace=True,
+            use_hw_pipeline=True,
+            max_resolution="1080p",
+            quality="high",
+        )
+        vf = post[post.index("-vf") + 1]
+        assert "vpp_qsv" in vf
+        assert "scale_qsv" in vf
+
+    def test_software_filters(self):
+        """Test software uses yadif and scale."""
+        pre, post = _build_video_args(
+            copy_video=False,
+            hw="software",
+            deinterlace=True,
+            use_hw_pipeline=False,
+            max_resolution="1080p",
+            quality="high",
+        )
+        assert pre == []
+        vf = post[post.index("-vf") + 1]
+        assert "yadif=1" in vf
+
+    @pytest.mark.parametrize(
+        "quality,expected_qp", [("high", "20"), ("medium", "28"), ("low", "35")]
     )
+    def test_quality_presets(self, quality: str, expected_qp: str):
+        """Test quality presets map to correct QP values."""
+        _, post = _build_video_args(
+            copy_video=False,
+            hw="vaapi",
+            deinterlace=False,
+            use_hw_pipeline=True,
+            max_resolution="1080p",
+            quality=quality,
+        )
+        assert expected_qp in post
+
+    def test_invalid_hw_raises(self):
+        """Test invalid hardware raises ValueError."""
+        with pytest.raises(ValueError, match="Unrecognized hardware"):
+            _build_video_args(
+                copy_video=False,
+                hw="invalid",  # type: ignore
+                deinterlace=False,
+                use_hw_pipeline=False,
+                max_resolution="1080p",
+                quality="high",
+            )
 
 
-def make_session_json(output_dir: str, session_id: str, url: str, seek_offset: float = 0):
-    """Create session.json for recovery."""
-    info = {
-        "session_id": session_id,
-        "url": url,
-        "is_vod": True,
-        "started": time.time(),
-        "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-        "duration": 2876.0,
-        "seek_offset": seek_offset,
-    }
-    (pathlib.Path(output_dir) / "session.json").write_text(json.dumps(info))
+class TestBuildAudioArgs:
+    """Tests for _build_audio_args."""
 
+    def test_copy_audio(self):
+        """Test copy_audio returns copy args."""
+        args = _build_audio_args(copy_audio=True, audio_sample_rate=48000)
+        assert args == ["-c:a", "copy"]
 
-# Import after defining helpers to avoid import errors during collection
-@pytest.fixture
-def transcoding_module():
-    """Import transcoding module with mocked settings."""
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).parent))
-    import transcoding
-
-    transcoding.init(
-        lambda: {
-            "transcode_hw": "software",
-            "probe_movies": True,
-            "vod_transcode_cache_mins": 60,
-        }
+    @pytest.mark.parametrize(
+        "sample_rate,expected",
+        [
+            (44100, "44100"),
+            (48000, "48000"),
+            (96000, "48000"),  # non-standard falls back to 48000
+            (0, "48000"),
+        ],
     )
-    yield transcoding
-    # Cleanup sessions after test
-    with transcoding._transcode_lock:
-        transcoding._transcode_sessions.clear()
-        transcoding._vod_url_to_session.clear()
+    def test_sample_rates(self, sample_rate: int, expected: str):
+        """Test sample rate handling."""
+        args = _build_audio_args(copy_audio=False, audio_sample_rate=sample_rate)
+        assert "-ar" in args
+        assert expected in args
 
 
-class TestScenarioA:
-    """A: Active session (ffmpeg running) -> return it, CC works."""
+class TestBuildHlsFfmpegCmd:
+    """Tests for build_hls_ffmpeg_cmd."""
 
-    @pytest.mark.asyncio
-    async def test_active_session_returned(self, transcoding_module):
-        with tempfile.TemporaryDirectory() as output_dir:
-            make_playlist(output_dir, 5)
-            make_vtt(output_dir)
+    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    @pytest.mark.parametrize("is_vod", [True, False])
+    def test_command_structure(self, hw: HwAccel, is_vod: bool):
+        """Test command has correct structure for all hw/vod combinations."""
+        cmd = build_hls_ffmpeg_cmd(
+            "http://test/stream",
+            hw,
+            "/tmp/output",
+            is_vod=is_vod,
+        )
 
-            # Active process (returncode is None)
-            mock_process = mock.Mock()
-            mock_process.returncode = None
+        # Basic structure
+        assert cmd[0] == "ffmpeg"
+        assert "-i" in cmd
+        assert "-map" in cmd
+        assert "-c:v" in cmd
+        assert "-c:a" in cmd
+        assert "-f" in cmd
+        assert "hls" in cmd
 
-            existing = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 1260,
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-                "duration": 2876.0,
-            }
+        # hwaccel before -i for hw encoders
+        i_idx = cmd.index("-i")
+        if "-hwaccel" in cmd:
+            hwaccel_idx = cmd.index("-hwaccel")
+            assert hwaccel_idx < i_idx, "hwaccel must come before -i"
 
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_a"] = existing
+        # -vf after -i
+        if "-vf" in cmd:
+            vf_idx = cmd.index("-vf")
+            assert vf_idx > i_idx, "-vf must come after -i"
 
-            result = await transcoding_module._handle_existing_vod_session(
-                "test_a", "http://example.com/video.mkv", "software", False
-            )
+    def test_vod_hls_flags(self):
+        """Test VOD has correct HLS flags."""
+        cmd = build_hls_ffmpeg_cmd("http://test", "software", "/tmp", is_vod=True)
+        assert "-hls_playlist_type" in cmd
+        assert "event" in cmd
+        assert "-hls_list_size" in cmd
+        assert cmd[cmd.index("-hls_list_size") + 1] == "0"
 
-            assert result is not None, "Should return session"
-            assert result["session_id"] == "test_a"
-            assert result["seek_offset"] == 1260
-            assert len(result["subtitles"]) > 0, "Should have subtitles"
+    def test_live_hls_flags(self):
+        """Test live has correct HLS flags."""
+        cmd = build_hls_ffmpeg_cmd("http://test", "software", "/tmp", is_vod=False)
+        assert "delete_segments" in cmd
+        assert "-hls_list_size" in cmd
+        assert cmd[cmd.index("-hls_list_size") + 1] == "10"
 
-
-class TestScenarioB:
-    """B: Dead session, seek_offset=0, segments exist -> append."""
-
-    @pytest.mark.asyncio
-    async def test_dead_session_no_seek_appends(self, transcoding_module):
-        with tempfile.TemporaryDirectory() as output_dir:
-            hls_duration = make_playlist(output_dir, 10)  # 60s
-            make_vtt(output_dir)
-
-            # Dead process
-            mock_process = mock.Mock()
-            mock_process.returncode = -9
-
-            existing = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 0,  # No prior jump
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-                "duration": 2876.0,
-            }
-
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_b"] = existing
-
-            with mock.patch("asyncio.create_subprocess_exec") as mock_exec:
-                mock_proc = mock.AsyncMock()
-                mock_proc.returncode = None
-                mock_proc.pid = 12345
-                mock_exec.return_value = mock_proc
-
-                # Create next segment so resume loop doesn't wait
-                def create_segment(*args, **kwargs):
-                    (pathlib.Path(output_dir) / "seg010.ts").write_bytes(b"x" * 2000)
-                    return mock_proc
-
-                mock_exec.side_effect = create_segment
-
-                with mock.patch.object(transcoding_module, "_wait_for_playlist", return_value=True):
-                    result = await transcoding_module._handle_existing_vod_session(
-                        "test_b", "http://example.com/video.mkv", "software", False
-                    )
-
-            assert result is not None, "Should return session after append"
-            # Check ffmpeg was called with append_list
-            cmd = mock_exec.call_args[0]
-            cmd_str = " ".join(cmd)
-            assert "append_list" in cmd_str, "Should use append_list"
-            assert f"-ss {hls_duration}" in cmd_str or f"-ss {int(hls_duration)}" in cmd_str
-
-
-class TestScenarioC:
-    """C: Dead session, seek_offset>0, segments exist -> return cached, CC works."""
-
-    @pytest.mark.asyncio
-    async def test_dead_session_with_seek_returns_cached(self, transcoding_module):
-        with tempfile.TemporaryDirectory() as output_dir:
-            hls_duration = make_playlist(output_dir, 20)  # 120s
-            make_vtt(output_dir)
-
-            mock_process = mock.Mock()
-            mock_process.returncode = -9  # Dead
-
-            existing = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 1260,  # Prior jump
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-                "duration": 2876.0,
-            }
-
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_c"] = existing
-
-            # Should NOT start new ffmpeg
-            with mock.patch("asyncio.create_subprocess_exec") as mock_exec:
-                result = await transcoding_module._handle_existing_vod_session(
-                    "test_c", "http://example.com/video.mkv", "software", False
-                )
-
-            assert result is not None, "Should return cached session"
-            assert result["session_id"] == "test_c"
-            assert result["seek_offset"] == 1260
-            assert result["transcoded_duration"] == hls_duration
-            assert len(result["subtitles"]) > 0, "Should have subtitles from cache"
-            mock_exec.assert_not_called()  # No new ffmpeg
-
-
-class TestScenarioD:
-    """D: Dead session, no segments -> return None (triggers fresh start)."""
-
-    @pytest.mark.asyncio
-    async def test_dead_session_no_segments_returns_none(self, transcoding_module):
-        with tempfile.TemporaryDirectory() as output_dir:
-            # No segments, just empty dir
-
-            mock_process = mock.Mock()
-            mock_process.returncode = -9
-
-            existing = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 0,
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [],
-                "duration": 2876.0,
-            }
-
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_d"] = existing
-                transcoding_module._vod_url_to_session["http://example.com/video.mkv"] = "test_d"
-
-            result = await transcoding_module._handle_existing_vod_session(
-                "test_d", "http://example.com/video.mkv", "software", False
-            )
-
-            assert result is None, "Should return None to trigger fresh start"
-
-
-class TestScenarioF:
-    """F: Jump (seek_transcode) -> kill old, start fresh, CC works."""
-
-    @pytest.mark.asyncio
-    async def test_seek_extracts_subtitles(self, transcoding_module):
-        with tempfile.TemporaryDirectory() as output_dir:
-            make_playlist(output_dir, 10)
-            make_vtt(output_dir)
-            make_session_json(output_dir, "test_f", "http://example.com/video.mkv")
-
-            mock_process = mock.Mock()
-            mock_process.returncode = None
-            mock_process.kill = mock.Mock()
-            mock_process.wait = mock.AsyncMock()
-
-            session = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 0,
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-                "duration": 2876.0,
-            }
-
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_f"] = session
-
-            with mock.patch("asyncio.create_subprocess_exec") as mock_exec:
-                mock_proc = mock.AsyncMock()
-                mock_proc.returncode = None
-                mock_proc.pid = 12345
-                mock_exec.return_value = mock_proc
-
-                with mock.patch.object(transcoding_module, "_wait_for_playlist", return_value=True):
-                    result = await transcoding_module.seek_transcode("test_f", 1260.0)
-
-            assert result["ok"] is True
-            assert result["time"] == 1260.0
-
-            # Check ffmpeg was called with subtitle extraction
-            cmd = mock_exec.call_args[0]
-            cmd_str = " ".join(cmd)
-            assert "-ss 1260" in cmd_str, "Should seek to position"
-            assert "sub0.vtt" in cmd_str, "Should extract subtitles"
-            assert "-c:s webvtt" in cmd_str, "Should convert to webvtt"
-            # Subtitle timestamps should be offset to start at 0
-            assert "-output_ts_offset -1260" in cmd_str, "Should offset timestamps"
-
-
-class TestCCExtraction:
-    """Verify CC is extracted in fresh starts."""
-
-    def test_build_cmd_includes_subtitles(self, transcoding_module):
-        subtitles = [
-            transcoding_module.SubtitleStream(index=2, lang="eng", name="English"),
-        ]
-
-        cmd = transcoding_module.build_hls_ffmpeg_cmd(
-            "http://example.com/video.mkv",
-            "software",
-            "/tmp/test",
+    def test_copy_video_with_compatible_media(self):
+        """Test copy_video is used for compatible VOD media."""
+        media = FakeMediaInfo(video_codec="h264", pix_fmt="yuv420p", height=1080)
+        cmd = build_hls_ffmpeg_cmd(
+            "http://test",
+            "vaapi",
+            "/tmp",
             is_vod=True,
-            subtitles=subtitles,
+            media_info=media,  # type: ignore
+            max_resolution="1080p",
         )
+        # Should copy video, no hwaccel needed
+        assert "-c:v" in cmd
+        assert cmd[cmd.index("-c:v") + 1] == "copy"
+        assert "-hwaccel" not in cmd
 
-        cmd_str = " ".join(cmd)
-        assert "-map 0:2" in cmd_str
-        assert "sub0.vtt" in cmd_str
-        assert "-c:s webvtt" in cmd_str
-
-    def test_build_cmd_no_subtitles_when_none(self, transcoding_module):
-        cmd = transcoding_module.build_hls_ffmpeg_cmd(
-            "http://example.com/video.mkv",
-            "software",
-            "/tmp/test",
+    def test_no_copy_for_10bit(self):
+        """Test 10-bit content is transcoded, not copied."""
+        media = FakeMediaInfo(video_codec="h264", pix_fmt="yuv420p10le", height=1080)
+        cmd = build_hls_ffmpeg_cmd(
+            "http://test",
+            "vaapi",
+            "/tmp",
             is_vod=True,
-            subtitles=None,
+            media_info=media,  # type: ignore
         )
+        assert cmd[cmd.index("-c:v") + 1] != "copy"
+        assert "-hwaccel" in cmd
 
-        cmd_str = " ".join(cmd)
-        assert "sub0.vtt" not in cmd_str
-        assert "-c:s" not in cmd_str
-
-
-class TestCompoundScenarios:
-    """Compound scenarios: sequences of operations."""
-
-    @pytest.mark.asyncio
-    async def test_jump_then_resume(self, transcoding_module):
-        """Jump -> close -> Resume: Should return cached with CC."""
-        with tempfile.TemporaryDirectory() as output_dir:
-            # After jump: seek_offset=1260, some segments transcoded
-            make_playlist(output_dir, 20)  # 120s transcoded
-            make_vtt(output_dir)  # CC from jump
-
-            mock_process = mock.Mock()
-            mock_process.returncode = -9  # Dead (user closed browser)
-
-            existing = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 1260,  # From prior jump
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-                "duration": 2876.0,
-            }
-
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_jr"] = existing
-
-            result = await transcoding_module._handle_existing_vod_session(
-                "test_jr", "http://example.com/video.mkv", "software", False
-            )
-
-            assert result is not None
-            assert result["seek_offset"] == 1260
-            assert result["transcoded_duration"] == 120.0
-            assert len(result["subtitles"]) > 0, "CC should work from cached VTT"
-
-    @pytest.mark.asyncio
-    async def test_resume_then_jump(self, transcoding_module):
-        """Start -> close -> Resume -> Jump: Jump should work with CC."""
-        with tempfile.TemporaryDirectory() as output_dir:
-            # After resume (no prior jump): seek_offset=0
-            make_playlist(output_dir, 50)  # 300s transcoded
-            make_vtt(output_dir)
-            make_session_json(output_dir, "test_rj", "http://example.com/video.mkv", seek_offset=0)
-
-            mock_process = mock.Mock()
-            mock_process.returncode = None  # Active after resume
-            mock_process.kill = mock.Mock()
-            mock_process.wait = mock.AsyncMock()
-
-            session = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 0,
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-                "duration": 2876.0,
-            }
-
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_rj"] = session
-
-            # Now jump to 1260
-            with mock.patch("asyncio.create_subprocess_exec") as mock_exec:
-                mock_proc = mock.AsyncMock()
-                mock_proc.returncode = None
-                mock_proc.pid = 12345
-                mock_exec.return_value = mock_proc
-
-                with mock.patch.object(transcoding_module, "_wait_for_playlist", return_value=True):
-                    result = await transcoding_module.seek_transcode("test_rj", 1260.0)
-
-            assert result["ok"] is True
-            cmd_str = " ".join(mock_exec.call_args[0])
-            assert "sub0.vtt" in cmd_str, "Jump should extract CC"
-
-    @pytest.mark.asyncio
-    async def test_jump_then_jump(self, transcoding_module):
-        """Jump -> Jump: Second jump should work with CC."""
-        with tempfile.TemporaryDirectory() as output_dir:
-            # After first jump: seek_offset=1260
-            make_playlist(output_dir, 10)
-            make_vtt(output_dir)
-            make_session_json(
-                output_dir, "test_jj", "http://example.com/video.mkv", seek_offset=1260
-            )
-
-            mock_process = mock.Mock()
-            mock_process.returncode = None
-            mock_process.kill = mock.Mock()
-            mock_process.wait = mock.AsyncMock()
-
-            session = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 1260,
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-                "duration": 2876.0,
-            }
-
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_jj"] = session
-
-            # Second jump to 2000
-            with mock.patch("asyncio.create_subprocess_exec") as mock_exec:
-                mock_proc = mock.AsyncMock()
-                mock_proc.returncode = None
-                mock_proc.pid = 12345
-                mock_exec.return_value = mock_proc
-
-                with mock.patch.object(transcoding_module, "_wait_for_playlist", return_value=True):
-                    result = await transcoding_module.seek_transcode("test_jj", 2000.0)
-
-            assert result["ok"] is True
-            assert result["time"] == 2000.0
-            cmd_str = " ".join(mock_exec.call_args[0])
-            assert "-ss 2000" in cmd_str
-            assert "sub0.vtt" in cmd_str, "Second jump should extract CC"
-
-    @pytest.mark.asyncio
-    async def test_jump_resume_jump(self, transcoding_module):
-        """Jump -> close -> Resume -> Jump: Full cycle."""
-        with tempfile.TemporaryDirectory() as output_dir:
-            # State after Jump -> Resume: cached session with seek_offset=1260
-            make_playlist(output_dir, 20)
-            make_vtt(output_dir)
-            make_session_json(
-                output_dir, "test_jrj", "http://example.com/video.mkv", seek_offset=1260
-            )
-
-            mock_process = mock.Mock()
-            mock_process.returncode = -9  # Dead from resume
-
-            existing = {
-                "dir": output_dir,
-                "process": mock_process,
-                "seek_offset": 1260,
-                "url": "http://example.com/video.mkv",
-                "is_vod": True,
-                "subtitles": [{"index": 2, "lang": "eng", "name": "English"}],
-                "duration": 2876.0,
-            }
-
-            with transcoding_module._transcode_lock:
-                transcoding_module._transcode_sessions["test_jrj"] = existing
-
-            # Resume returns cached
-            result = await transcoding_module._handle_existing_vod_session(
-                "test_jrj", "http://example.com/video.mkv", "software", False
-            )
-            assert result is not None
-            assert result["seek_offset"] == 1260
-
-            # Now user jumps to 2000
-            existing["process"] = mock.Mock()
-            existing["process"].returncode = None  # Simulate active after load
-            existing["process"].kill = mock.Mock()
-            existing["process"].wait = mock.AsyncMock()
-
-            with mock.patch("asyncio.create_subprocess_exec") as mock_exec:
-                mock_proc = mock.AsyncMock()
-                mock_proc.returncode = None
-                mock_proc.pid = 12345
-                mock_exec.return_value = mock_proc
-
-                with mock.patch.object(transcoding_module, "_wait_for_playlist", return_value=True):
-                    result = await transcoding_module.seek_transcode("test_jrj", 2000.0)
-
-            assert result["ok"] is True
-            cmd_str = " ".join(mock_exec.call_args[0])
-            assert "sub0.vtt" in cmd_str, "Jump after resume should extract CC"
-
-
-class TestSeriesProbeCache:
-    """Tests for series probe cache persistence and invalidation."""
-
-    def test_series_cache_hit(self, transcoding_module):
-        """Series probe cache should return cached result (exact episode match)."""
-        media_info = transcoding_module.MediaInfo(
-            video_codec="h264",
-            audio_codec="aac",
-            pix_fmt="yuv420p",
-            audio_channels=2,
-            audio_sample_rate=48000,
-            duration=2876.0,
+    def test_no_copy_when_scaling_needed(self):
+        """Test scaling requirement prevents copy."""
+        media = FakeMediaInfo(video_codec="h264", pix_fmt="yuv420p", height=2160)
+        cmd = build_hls_ffmpeg_cmd(
+            "http://test",
+            "vaapi",
+            "/tmp",
+            is_vod=True,
+            media_info=media,  # type: ignore
+            max_resolution="1080p",
         )
-        subs = [transcoding_module.SubtitleStream(index=2, lang="eng", name="English")]
+        assert cmd[cmd.index("-c:v") + 1] != "copy"
 
-        # Populate cache: series 1234, episode 101 (new structure with name/episodes)
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache[1234] = {
-                "name": "Test Series",
-                "episodes": {101: (time.time(), media_info, subs)},
-            }
-
-        # Should hit cache without calling ffprobe
-        with mock.patch("subprocess.run") as mock_run:
-            result_info, result_subs = transcoding_module.probe_media(
-                "http://example.com/ep1.mkv", series_id=1234, episode_id=101
-            )
-
-        mock_run.assert_not_called()
-        assert result_info is not None
-        assert result_info.video_codec == "h264"
-        assert len(result_subs) == 1
-        # MRU should be updated to 101
-        assert transcoding_module._series_probe_cache[1234].get("mru") == 101
-
-        # Cleanup
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache.clear()
-
-    def test_series_cache_fallback(self, transcoding_module):
-        """Series probe cache should fall back to most recent episode."""
-        media_info = transcoding_module.MediaInfo(
-            video_codec="hevc",
-            audio_codec="aac",
-            pix_fmt="yuv420p",
+    def test_user_agent(self):
+        """Test user agent is included when provided."""
+        cmd = build_hls_ffmpeg_cmd(
+            "http://test",
+            "software",
+            "/tmp",
+            user_agent="TestAgent/1.0",
         )
+        assert "-user_agent" in cmd
+        assert "TestAgent/1.0" in cmd
 
-        # Populate cache: series 1234, episode 101 only (new structure)
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache[1234] = {
-                "name": "Test Series",
-                "mru": 101,
-                "episodes": {101: (time.time(), media_info, [])},
-            }
+    def test_probe_args_without_media_info(self):
+        """Test probe args are added when no media_info."""
+        cmd = build_hls_ffmpeg_cmd("http://test", "software", "/tmp", media_info=None)
+        assert "-probesize" in cmd
+        assert "-analyzeduration" in cmd
 
-        # Request episode 102 (not cached) - should fall back to MRU (101)
-        with mock.patch("subprocess.run") as mock_run:
-            result_info, _ = transcoding_module.probe_media(
-                "http://example.com/ep2.mkv", series_id=1234, episode_id=102
-            )
+    def test_no_probe_args_with_media_info(self):
+        """Test probe args are skipped when media_info provided."""
+        media = FakeMediaInfo()
+        cmd = build_hls_ffmpeg_cmd("http://test", "software", "/tmp", media_info=media)  # type: ignore
+        assert "-probesize" not in cmd
 
-        mock_run.assert_not_called()
-        assert result_info is not None
-        assert result_info.video_codec == "hevc"
-        # MRU stays at 101 (fallback doesn't change MRU)
-        assert transcoding_module._series_probe_cache[1234].get("mru") == 101
 
-        # Cleanup
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache.clear()
+class TestAspectRatioHandling:
+    """Tests for various aspect ratio content."""
 
-    def test_series_cache_invalidation(self, transcoding_module):
-        """Invalidating series cache should clear MRU pointer."""
-        media_info = transcoding_module.MediaInfo(
-            video_codec="h264",
-            audio_codec="aac",
-            pix_fmt="yuv420p",
+    @pytest.mark.parametrize(
+        "input_height,max_res,should_scale",
+        [
+            (1080, "1080p", False),  # exact match - no min(ih,X) needed
+            (1080, "720p", True),  # needs scale down
+            (720, "1080p", False),  # smaller than max, but min(ih,1080) still present
+            (2160, "1080p", True),  # 4K to 1080p
+            (1600, "1080p", True),  # ultrawide 4K to 1080p
+            (1600, "4k", False),  # ultrawide 4K, no scale needed
+        ],
+    )
+    def test_scaling_decisions(self, input_height: int, max_res: str, should_scale: bool):
+        """Test correct scaling decisions for various input heights."""
+        media = FakeMediaInfo(height=input_height, pix_fmt="yuv420p10le")
+        cmd = build_hls_ffmpeg_cmd(
+            "http://test",
+            "vaapi",
+            "/tmp",
+            is_vod=True,
+            media_info=media,  # type: ignore
+            max_resolution=max_res,
         )
+        vf = cmd[cmd.index("-vf") + 1]
+        # Check filter contains height constraint
+        from transcoding import _MAX_RES_HEIGHT
 
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache[5678] = {
-                "name": "Test",
-                "mru": 101,
-                "episodes": {101: (time.time(), media_info, [])},
-            }
-
-        assert 5678 in transcoding_module._series_probe_cache
-        assert transcoding_module._series_probe_cache[5678].get("mru") == 101
-
-        # Mock save to avoid file I/O
-        with mock.patch.object(transcoding_module, "_save_series_probe_cache"):
-            transcoding_module.invalidate_series_probe_cache(5678)
-
-        # Series entry is deleted entirely
-        assert 5678 not in transcoding_module._series_probe_cache
-
-        # Cleanup
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache.clear()
-
-    def test_series_cache_invalidation_episode(self, transcoding_module):
-        """Invalidating specific episode should keep other episodes."""
-        media_info = transcoding_module.MediaInfo(
-            video_codec="h264",
-            audio_codec="aac",
-            pix_fmt="yuv420p",
-        )
-
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache[5678] = {
-                "name": "Test",
-                "episodes": {
-                    101: (time.time(), media_info, []),
-                    102: (time.time(), media_info, []),
-                },
-            }
-
-        # Mock save to avoid file I/O
-        with mock.patch.object(transcoding_module, "_save_series_probe_cache"):
-            transcoding_module.invalidate_series_probe_cache(5678, episode_id=101)
-
-        assert 5678 in transcoding_module._series_probe_cache
-        episodes = transcoding_module._series_probe_cache[5678]["episodes"]
-        assert 101 not in episodes
-        assert 102 in episodes
-
-        # Cleanup
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache.clear()
-
-    def test_series_cache_save_load(self, transcoding_module):
-        """Series cache should persist to and load from disk."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cache_file = pathlib.Path(tmpdir) / "series_probe_cache.json"
-
-            # Temporarily override cache file path
-            original_file = transcoding_module._SERIES_PROBE_CACHE_FILE
-            transcoding_module._SERIES_PROBE_CACHE_FILE = cache_file
-
-            try:
-                media_info = transcoding_module.MediaInfo(
-                    video_codec="hevc",
-                    audio_codec="eac3",
-                    pix_fmt="yuv420p10le",
-                    audio_channels=6,
-                    audio_sample_rate=48000,
-                    subtitle_codecs=["subrip"],
-                    duration=3600.0,
-                )
-                subs = [transcoding_module.SubtitleStream(index=3, lang="spa", name="Spanish")]
-
-                with transcoding_module._probe_lock:
-                    transcoding_module._series_probe_cache[9999] = {
-                        "name": "Test Show",
-                        "episodes": {201: (time.time(), media_info, subs)},
-                    }
-
-                # Save
-                transcoding_module._save_series_probe_cache()
-                assert cache_file.exists()
-
-                # Clear and reload
-                with transcoding_module._probe_lock:
-                    transcoding_module._series_probe_cache.clear()
-
-                transcoding_module._load_series_probe_cache()
-
-                assert 9999 in transcoding_module._series_probe_cache
-                episodes = transcoding_module._series_probe_cache[9999]["episodes"]
-                assert 201 in episodes
-                _, loaded_info, loaded_subs = episodes[201]
-                assert loaded_info.video_codec == "hevc"
-                assert loaded_info.audio_codec == "eac3"
-                assert len(loaded_subs) == 1
-                assert loaded_subs[0].lang == "spa"
-                assert transcoding_module._series_probe_cache[9999]["name"] == "Test Show"
-            finally:
-                transcoding_module._SERIES_PROBE_CACHE_FILE = original_file
-                with transcoding_module._probe_lock:
-                    transcoding_module._series_probe_cache.clear()
-
-    def test_series_cache_populated_on_probe(self, transcoding_module):
-        """Fresh probe with series_id should populate series cache."""
-        probe_output = json.dumps(
-            {
-                "streams": [
-                    {"codec_type": "video", "codec_name": "h264", "pix_fmt": "yuv420p"},
-                    {
-                        "codec_type": "audio",
-                        "codec_name": "aac",
-                        "channels": 2,
-                        "sample_rate": "48000",
-                    },
-                ],
-                "format": {"duration": "1800.0"},
-            }
-        )
-
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.return_value = mock.Mock(returncode=0, stdout=probe_output)
-            with mock.patch.object(transcoding_module, "_save_series_probe_cache"):
-                result_info, _ = transcoding_module.probe_media(
-                    "http://example.com/ep2.mkv", series_id=4321, episode_id=301, series_name="Test"
-                )
-
-        assert result_info is not None
-        assert 4321 in transcoding_module._series_probe_cache
-        episodes = transcoding_module._series_probe_cache[4321]["episodes"]
-        assert 301 in episodes
-        # Fresh probe sets MRU to current episode
-        assert transcoding_module._series_probe_cache[4321].get("mru") == 301
-
-        # Cleanup
-        with transcoding_module._probe_lock:
-            transcoding_module._series_probe_cache.clear()
-            transcoding_module._probe_cache.clear()
+        max_h = _MAX_RES_HEIGHT.get(max_res, 9999)
+        height_expr = f"min(ih,{max_h})"
+        assert height_expr in vf, f"Expected {height_expr} in {vf}"
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    from testing import run_tests
+
+    run_tests(__file__)

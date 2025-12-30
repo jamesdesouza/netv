@@ -7,6 +7,8 @@
 #   https://github.com/engenex/xtream-codes-api-v2/blob/main/%5BHow-To%5D%20Player%20API%20v2%20-%20Tutorials%20-%20Xtream%20Codes.pdf
 from __future__ import annotations
 
+from typing import Any, Protocol
+
 import collections
 import concurrent.futures
 import functools
@@ -22,8 +24,6 @@ import urllib
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
-from typing import Protocol
 
 
 class RetryableError(Exception):

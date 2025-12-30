@@ -263,13 +263,7 @@
             <input type="radio" name="transcode_hw" value="vaapi" {% if transcode_hw == 'vaapi' %}checked{% endif %}
                    {% if not available_encoders.vaapi %}disabled{% endif %}
                    class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-            <span>VA-API</span>
-          </label>
-          <label class="flex items-center gap-2 {% if not available_encoders.qsv %}opacity-40{% endif %}">
-            <input type="radio" name="transcode_hw" value="qsv" {% if transcode_hw == 'qsv' %}checked{% endif %}
-                   {% if not available_encoders.qsv %}disabled{% endif %}
-                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-            <span>Intel QSV</span>
+            <span>Intel/AMD (VA-API)</span>
           </label>
           <label class="flex items-center gap-2 {% if not available_encoders.software %}opacity-40{% endif %}">
             <input type="radio" name="transcode_hw" value="software" {% if transcode_hw == 'software' %}checked{% endif %}
@@ -278,6 +272,11 @@
             <span>Software</span>
           </label>
         </div>
+        <p class="text-xs text-gray-400 mt-1">Choose the most specific option available for your hardware</p>
+        <button type="button" id="refresh-encoders-btn"
+                class="mt-2 px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded">
+          Re-detect Hardware
+        </button>
       </div>
       <div>
         <label class="block text-sm font-medium mb-2">Max Transcode Resolution</label>
@@ -324,7 +323,7 @@
             <span>Low</span>
           </label>
         </div>
-        <p class="text-xs text-gray-400 mt-1">Maximum quality ceiling (won't use more bits than source needs)</p>
+        <p class="text-xs text-gray-400 mt-1">Maximum quality ceiling (won't use more bits than source provides)</p>
       </div>
       <div>
         <label class="block text-sm font-medium mb-2">VOD Transcode Cache (minutes)</label>

@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
+
 import json
 import logging
 import pathlib
 import subprocess
 import threading
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
-from dataclasses import field
-from typing import Any
 
 
 log = logging.getLogger(__name__)
@@ -141,33 +141,103 @@ def get_cached_info(cache_key: str, fetch_fn: Callable[[], Any], force: bool = F
     return data
 
 
-def detect_encoders() -> dict[str, bool]:
-    """Detect available FFmpeg H.264 encoders."""
-    encoders = {"nvidia": False, "vaapi": False, "qsv": False, "software": False}
+def _test_encoder(cmd: list[str], timeout: int = 5) -> tuple[bool, str]:
+    """Test if an encoder works. Returns (success, error_message)."""
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-encoders"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        output = result.stdout + result.stderr
-        encoders["nvidia"] = "h264_nvenc" in output
-        encoders["vaapi"] = "h264_vaapi" in output
-        encoders["qsv"] = "h264_qsv" in output
-        encoders["software"] = "libx264" in output
-    except Exception:
-        pass
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        if result.returncode == 0:
+            return True, ""
+        stderr = result.stderr.decode(errors="replace").strip()
+        # Extract the most relevant error line
+        for line in stderr.split("\n"):
+            if line and not line.startswith("["):
+                return False, line
+        return False, stderr if stderr else "unknown error"
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except FileNotFoundError:
+        return False, "ffmpeg not found"
+    except Exception as e:
+        return False, str(e)
+
+
+def detect_encoders() -> dict[str, bool]:
+    """Detect available FFmpeg H.264 encoders by testing actual hardware."""
+    log.info("Detecting hardware encoders...")
+    encoders = {
+        "nvidia": False,
+        "intel": False,
+        "vaapi": False,
+        "software": False,
+    }
+
+    # Test input: 1 frame of 64x64 black
+    test_input = ["-f", "lavfi", "-i", "color=black:s=64x64:d=0.04", "-frames:v", "1"]
+    base_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    null_out = ["-f", "null", "-"]
+
+    # NVIDIA: try nvenc directly
+    ok, err = _test_encoder(base_cmd + test_input + ["-c:v", "h264_nvenc"] + null_out)
+    encoders["nvidia"] = ok
+    if ok:
+        log.info("  NVIDIA (h264_nvenc): available")
+    else:
+        log.info("  NVIDIA (h264_nvenc): unavailable - %s", err)
+
+    # Intel QSV: needs hwaccel init
+    ok, err = _test_encoder(
+        base_cmd
+        + ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
+        + test_input
+        + ["-c:v", "h264_qsv"]
+        + null_out
+    )
+    encoders["intel"] = ok
+    if ok:
+        log.info("  Intel (h264_qsv): available")
+    else:
+        log.info("  Intel (h264_qsv): unavailable - %s", err)
+
+    # VA-API: needs device and hwupload
+    ok, err = _test_encoder(
+        base_cmd
+        + ["-vaapi_device", "/dev/dri/renderD128"]
+        + test_input
+        + ["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]
+        + null_out
+    )
+    encoders["vaapi"] = ok
+    if ok:
+        log.info("  VA-API (h264_vaapi): available")
+    else:
+        log.info("  VA-API (h264_vaapi): unavailable - %s", err)
+
+    # Software: libx264
+    ok, err = _test_encoder(
+        base_cmd + test_input + ["-c:v", "libx264", "-preset", "ultrafast"] + null_out
+    )
+    encoders["software"] = ok
+    if ok:
+        log.info("  Software (libx264): available")
+    else:
+        log.info("  Software (libx264): unavailable - %s", err)
+
     return encoders
 
 
 AVAILABLE_ENCODERS = detect_encoders()
 
 
+def refresh_encoders() -> dict[str, bool]:
+    """Re-detect available encoders and update the cache."""
+    global AVAILABLE_ENCODERS
+    AVAILABLE_ENCODERS = detect_encoders()
+    return AVAILABLE_ENCODERS
+
+
 def _default_encoder() -> str:
-    """Return first available encoder, preferring hardware."""
-    for enc in ("nvidia", "vaapi", "qsv", "software"):
+    """Return first available encoder, preferring most specific."""
+    for enc in ("nvidia", "intel", "vaapi", "software"):
         if AVAILABLE_ENCODERS.get(enc):
             return enc
     return "software"
@@ -279,20 +349,9 @@ def save_watch_position(username: str, stream_url: str, position: float, duratio
     save_user_settings(username, settings)
 
 
-# Legacy compatibility - load_settings now returns merged view for backwards compat
-def load_settings() -> dict[str, Any]:
-    """Load settings (legacy compatibility - returns server settings)."""
-    return load_server_settings()
-
-
-def save_settings(settings: dict[str, Any]) -> None:
-    """Save settings (legacy compatibility - saves to server settings)."""
-    save_server_settings(settings)
-
-
 def get_sources() -> list[Source]:
     """Get list of configured sources."""
-    settings = load_settings()
+    settings = load_server_settings()
     return [Source(**s) for s in settings.get("sources", [])]
 
 
@@ -300,10 +359,10 @@ def update_source_epg_url(source_id: str, epg_url: str) -> None:
     """Update a source's epg_url in settings (only if currently empty)."""
     if not epg_url:
         return
-    settings = load_settings()
+    settings = load_server_settings()
     for s in settings.get("sources", []):
         if s["id"] == source_id and not s.get("epg_url"):
             s["epg_url"] = epg_url
-            save_settings(settings)
+            save_server_settings(settings)
             log.info("Saved EPG URL for source %s: %s", source_id, epg_url)
             break

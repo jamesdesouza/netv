@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest import mock
+
+import json
 
 import pytest
 
@@ -111,3 +112,9 @@ class TestSecretKey:
         settings_file = auth_module._get_settings_file()
         settings = json.loads(settings_file.read_text())
         assert settings["secret_key"] == key1
+
+
+if __name__ == "__main__":
+    from testing import run_tests
+
+    run_tests(__file__)

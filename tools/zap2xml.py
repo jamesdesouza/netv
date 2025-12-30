@@ -17,6 +17,9 @@ Cron example:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any, ClassVar
+
 import argparse
 import datetime
 import gzip  # lzma(80%), bz2(78%), gzip(75%) but gzip was fastest.
@@ -30,9 +33,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as xml
-from collections.abc import Mapping
-from typing import Any
-from typing import ClassVar
 
 
 SECONDS_PER_HOUR = 3_600
