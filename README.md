@@ -88,15 +88,14 @@ NETV_HTTPS=1 docker compose up -d          # enable HTTPS (mount certs first)
 
 First build takes ~15-20 min (compiles FFmpeg with all HW acceleration).
 
-**Hardware transcoding:**
-- **VAAPI (Intel/AMD)**: Set your render group GID in `.env`:
-  ```bash
-  stat -c 'RENDER_GID=%g' /dev/dri/renderD128 >> .env
-  ```
-  If `/dev/dri` doesn't exist, comment out the `devices` and `group_add`
-  sections in `docker-compose.yml`.
-- **NVIDIA**: Requires nvidia-container-toolkit. Use: `docker compose --profile
-  nvidia up -d`
+**Hardware transcoding** is auto-detected. Check Settings to see available encoders.
+- **Intel/AMD (VAAPI)**: Works automatically if `/dev/dri` exists. If VAAPI shows
+  unavailable, uncomment `group_add` in `docker-compose.yml` with your render GID
+  (`stat -c '%g' /dev/dri/renderD128`).
+- **NVIDIA**: Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html):
+  `docker compose --profile nvidia up -d`
+- **No GPU / VPS**: If `/dev/dri` doesn't exist, comment out the `devices` section
+  in `docker-compose.yml` or compose will fail to start.
 
 ### Debian/Ubuntu (`systemd`)
 

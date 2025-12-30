@@ -710,8 +710,19 @@
 
   function setupKeyboardControls() {
     document.addEventListener('keydown', (e) => {
-      // Skip if in input field
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+      // In seek input: allow player hotkeys, block other non-time chars
+      if (e.target.id === 'seek-input') {
+        const passthrough = ['j', 'm', 'f', ' ', 'k', 'c', 'i', 'Escape'];
+        if (!passthrough.includes(e.key) && !/^[0-9:]$/.test(e.key) &&
+            !['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Tab', 'Enter'].includes(e.key)) {
+          e.preventDefault();
+          return;
+        }
+        // Let passthrough keys fall through to main handler below
+        if (!passthrough.includes(e.key)) return;
+      }
+      // Skip other input fields entirely
+      else if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
         if (e.key === 'Escape') e.target.blur();
         return;
       }
@@ -871,6 +882,10 @@
       e.stopPropagation();
       seekContainer.classList.toggle('hidden');
       if (!seekContainer.classList.contains('hidden')) {
+        // Show controls and prevent auto-hide while jump input is active
+        document.getElementById('player-container').classList.add('controls-visible');
+        clearTimeout(activityTimeoutId);
+        activityTimeoutId = null;
         seekInput.value = '';
         seekInput.focus();
       }
@@ -1016,6 +1031,10 @@
       settingsMenu.classList.remove('open');
       seekContainer.classList.toggle('hidden');
       if (!seekContainer.classList.contains('hidden')) {
+        // Show controls and prevent auto-hide while jump input is active
+        document.getElementById('player-container').classList.add('controls-visible');
+        clearTimeout(activityTimeoutId);
+        activityTimeoutId = null;
         seekInput.value = '';
         seekInput.focus();
       }
@@ -1119,12 +1138,13 @@
       }
     });
 
-    // Seek input handler
+    // Seek input handler - filter chars here (must be at input level to block typing)
     seekInput?.addEventListener('keydown', async function(e) {
-      if (e.key === 'Escape') {
-        seekContainer.classList.add('hidden');
-        return;
-      }
+      // Only allow: digits, colon, navigation keys, Enter
+      // Hotkeys and other chars: preventDefault (hotkeys will still bubble to global handler)
+      const typeable = /^[0-9:]$/.test(e.key) ||
+        ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Tab'].includes(e.key);
+      if (!typeable) e.preventDefault();
       if (e.key !== 'Enter') return;
       e.preventDefault();
       const targetTime = parseTime(seekInput.value);
