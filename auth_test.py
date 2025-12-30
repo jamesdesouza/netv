@@ -50,6 +50,7 @@ class TestPasswordHashing:
         hashed = auth_module._hash_password("secret")
         assert not auth_module._verify_hashed_password("wrong", hashed)
 
+
 class TestUserManagement:
     def test_is_setup_required_no_users(self, auth_module):
         assert auth_module.is_setup_required()
@@ -60,6 +61,7 @@ class TestUserManagement:
         assert auth_module.verify_password("admin", "password123")
         assert not auth_module.verify_password("admin", "wrongpass")
         assert not auth_module.verify_password("nobody", "password123")
+
 
 class TestTokens:
     def test_create_and_verify_token(self, auth_module):
