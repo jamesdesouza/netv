@@ -2114,6 +2114,23 @@ async def settings_add_user(
     return {"status": "ok"}
 
 
+@app.post("/settings/users/password")
+async def settings_change_own_password(
+    user: Annotated[dict, Depends(require_auth)],
+    current_password: Annotated[str, Form()],
+    new_password: Annotated[str, Form()],
+):
+    """Change own password. Requires current password verification."""
+    username = user.get("sub", "")
+    if not auth.verify_password(username, current_password):
+        raise HTTPException(400, "Current password is incorrect")
+    if len(new_password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    if not auth.change_password(username, new_password):
+        raise HTTPException(404, "User not found")
+    return {"status": "ok"}
+
+
 @app.post("/settings/users/password/{target_user}")
 async def settings_change_password(
     target_user: str,

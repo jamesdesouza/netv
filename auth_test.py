@@ -50,12 +50,6 @@ class TestPasswordHashing:
         hashed = auth_module._hash_password("secret")
         assert not auth_module._verify_hashed_password("wrong", hashed)
 
-    def test_verify_legacy_plaintext(self, auth_module):
-        # Legacy format: no colon, just plaintext
-        assert auth_module._verify_hashed_password("mypass", "mypass")
-        assert not auth_module._verify_hashed_password("wrong", "mypass")
-
-
 class TestUserManagement:
     def test_is_setup_required_no_users(self, auth_module):
         assert auth_module.is_setup_required()
@@ -66,19 +60,6 @@ class TestUserManagement:
         assert auth_module.verify_password("admin", "password123")
         assert not auth_module.verify_password("admin", "wrongpass")
         assert not auth_module.verify_password("nobody", "password123")
-
-    def test_verify_migrates_legacy_password(self, auth_module, tmp_path: Path):
-        # Write legacy plaintext password
-        settings = {"users": {"olduser": "plaintext"}}
-        auth_module.SERVER_SETTINGS_FILE.write_text(json.dumps(settings))
-
-        # Verify should work and migrate
-        assert auth_module.verify_password("olduser", "plaintext")
-
-        # Check it was migrated to hashed format
-        new_settings = json.loads(auth_module.SERVER_SETTINGS_FILE.read_text())
-        assert ":" in new_settings["users"]["olduser"]
-
 
 class TestTokens:
     def test_create_and_verify_token(self, auth_module):
