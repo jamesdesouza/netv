@@ -16,6 +16,7 @@ class FakeMediaInfo:
         audio_channels: int = 2,
         audio_sample_rate: int = 48000,
         height: int = 1080,
+        interlaced: bool = False,
     ):
         self.video_codec = video_codec
         self.audio_codec = audio_codec
@@ -23,6 +24,7 @@ class FakeMediaInfo:
         self.audio_channels = audio_channels
         self.audio_sample_rate = audio_sample_rate
         self.height = height
+        self.interlaced = interlaced
 
 
 class TestBuildVideoArgs:

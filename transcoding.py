@@ -297,6 +297,11 @@ def _lang_display_name(code: str) -> str:
 def get_series_probe_cache_stats() -> list[dict[str, Any]]:
     """Get stats about cached series probes for settings UI."""
     with _probe_lock:
+        log.info(
+            "get_series_probe_cache_stats: cache has %d series: %s",
+            len(_series_probe_cache),
+            list(_series_probe_cache.keys()),
+        )
         result = []
         for series_id, series_data in _series_probe_cache.items():
             episodes = series_data.get("episodes", {})
@@ -369,6 +374,17 @@ def invalidate_series_probe_cache(series_id: int, episode_id: int | None = None)
     _save_series_probe_cache()
 
 
+def clear_series_mru(series_id: int) -> None:
+    """Clear only the MRU for a series, keeping episode cache intact."""
+    with _probe_lock:
+        if series_id not in _series_probe_cache:
+            return
+        if "mru" in _series_probe_cache[series_id]:
+            del _series_probe_cache[series_id]["mru"]
+            log.info("Cleared MRU for series=%d", series_id)
+    _save_series_probe_cache()
+
+
 def probe_media(
     url: str,
     series_id: int | None = None,
@@ -377,6 +393,8 @@ def probe_media(
 ) -> tuple[MediaInfo | None, list[SubtitleStream]]:
     """Probe media, returns (media_info, subtitles)."""
     # Check series/episode cache first
+    cache_hit_result: tuple[MediaInfo, list[SubtitleStream]] | None = None
+    save_mru = False
     if series_id is not None:
         with _probe_lock:
             series_data = _series_probe_cache.get(series_id)
@@ -388,15 +406,17 @@ def probe_media(
                     cache_time, media_info, subtitles = episodes[episode_id]
                     if time.time() - cache_time < _SERIES_PROBE_CACHE_TTL_SEC:
                         # Update MRU to this episode
-                        series_data["mru"] = episode_id
+                        if series_data.get("mru") != episode_id:
+                            series_data["mru"] = episode_id
+                            save_mru = True
                         log.info(
                             "Probe cache hit for series=%d episode=%d",
                             series_id,
                             episode_id,
                         )
-                        return media_info, subtitles
+                        cache_hit_result = (media_info, subtitles)
                 # Fall back to MRU if set
-                if mru_eid is not None and mru_eid in episodes:
+                elif mru_eid is not None and mru_eid in episodes:
                     cache_time, media_info, subtitles = episodes[mru_eid]
                     if time.time() - cache_time < _SERIES_PROBE_CACHE_TTL_SEC:
                         log.info(
@@ -404,7 +424,12 @@ def probe_media(
                             series_id,
                             mru_eid,
                         )
-                        return media_info, subtitles
+                        cache_hit_result = (media_info, subtitles)
+        # Save MRU update outside the lock to avoid deadlock
+        if save_mru:
+            _save_series_probe_cache()
+        if cache_hit_result:
+            return cache_hit_result
 
     # Check URL cache (for movies, or series cache miss)
     with _probe_lock:
@@ -535,7 +560,15 @@ def probe_media(
                 subtitles,
             )
             # Set MRU to this episode
+            old_mru = _series_probe_cache[series_id].get("mru")
             _series_probe_cache[series_id]["mru"] = eid
+            log.info(
+                "Probe cached: series=%s episode=%s, mru changed from %s to %s",
+                series_id,
+                eid,
+                old_mru,
+                eid,
+            )
     if series_id is not None:
         _save_series_probe_cache()
     return media_info, subtitles
@@ -866,6 +899,74 @@ def cleanup_expired_vod_sessions() -> None:
         ]
     for session_id in expired:
         stop_session(session_id, force=True)
+
+
+def get_user_sessions(username: str) -> list[tuple[str, dict[str, Any]]]:
+    """Get all active sessions for a user, sorted by start time (oldest first)."""
+    with _transcode_lock:
+        sessions = [
+            (sid, s) for sid, s in _transcode_sessions.items() if s.get("username") == username
+        ]
+    return sorted(sessions, key=lambda x: x[1].get("started", 0))
+
+
+def get_source_sessions(source_id: str) -> list[tuple[str, dict[str, Any]]]:
+    """Get all active sessions for a source, sorted by start time (oldest first)."""
+    with _transcode_lock:
+        sessions = [
+            (sid, s) for sid, s in _transcode_sessions.items() if s.get("source_id") == source_id
+        ]
+    return sorted(sessions, key=lambda x: x[1].get("started", 0))
+
+
+def enforce_stream_limits(
+    username: str,
+    source_id: str | None,
+    user_max: int,
+    source_max: int,
+) -> str | None:
+    """Enforce stream limits, stopping oldest sessions if needed.
+
+    Returns error message if source is at capacity and user can't reclaim,
+    or None if limits are satisfied (possibly after stopping old streams).
+    """
+    # Check source limit first (hard limit - can only reclaim own slots)
+    if source_id and source_max > 0:
+        source_sessions = get_source_sessions(source_id)
+        if len(source_sessions) >= source_max:
+            # Find user's sessions on this source
+            user_source_sessions = [
+                (sid, s) for sid, s in source_sessions if s.get("username") == username
+            ]
+            if user_source_sessions:
+                # Reclaim user's oldest session on this source
+                oldest_sid, _ = user_source_sessions[0]
+                log.info(
+                    "Source %s at limit (%d), stopping user %s's oldest session %s",
+                    source_id,
+                    source_max,
+                    username,
+                    oldest_sid,
+                )
+                stop_session(oldest_sid, force=True)
+            else:
+                # Source full, user has no sessions to reclaim
+                return f"Source at capacity ({source_max} streams)"
+
+    # Check user limit (soft limit - auto-rotate oldest)
+    if user_max > 0:
+        user_sessions = get_user_sessions(username)
+        if len(user_sessions) >= user_max:
+            oldest_sid, _ = user_sessions[0]
+            log.info(
+                "User %s at limit (%d), stopping oldest session %s",
+                username,
+                user_max,
+                oldest_sid,
+            )
+            stop_session(oldest_sid, force=True)
+
+    return None
 
 
 def recover_vod_sessions() -> None:
@@ -1262,6 +1363,8 @@ async def _do_start_transcode(
     old_seek_offset: float,
     series_name: str = "",
     deinterlace_fallback: bool = True,
+    username: str = "",
+    source_id: str = "",
 ) -> dict[str, Any]:
     """Core transcode logic. Raises HTTPException on failure."""
     settings = _load_settings()
@@ -1365,6 +1468,8 @@ async def _do_start_transcode(
             "seek_offset": old_seek_offset,
             "series_id": series_id,
             "episode_id": episode_id,
+            "username": username,
+            "source_id": source_id,
         }
         if is_vod:
             _vod_url_to_session[url] = session_id
@@ -1426,7 +1531,17 @@ async def _start_transcode(
     episode_id: int | None = None,
     series_name: str = "",
     deinterlace_fallback: bool = True,
+    username: str = "",
+    source_id: str = "",
+    user_max_streams: int = 0,
+    source_max_streams: int = 0,
 ) -> dict[str, Any]:
+    # Enforce stream limits (only if username provided - direct play is untracked)
+    if username:
+        error = enforce_stream_limits(username, source_id, user_max_streams, source_max_streams)
+        if error:
+            raise HTTPException(status_code=429, detail=error)
+
     is_vod = content_type in ("movie", "series")
     existing_id, is_valid, old_seek_offset = (
         _get_existing_vod_session(url) if is_vod else (None, False, 0.0)
@@ -1464,7 +1579,15 @@ async def _start_transcode(
     # Try transcode, retry once if series cache was stale
     try:
         return await _do_start_transcode(
-            url, content_type, series_id, episode_id, old_seek_offset, series_name, deinterlace_fallback
+            url,
+            content_type,
+            series_id,
+            episode_id,
+            old_seek_offset,
+            series_name,
+            deinterlace_fallback,
+            username,
+            source_id,
         )
     except HTTPException:
         if series_id is not None:
@@ -1472,7 +1595,15 @@ async def _start_transcode(
             log.info("Transcode failed, clearing MRU and retrying")
             invalidate_series_probe_cache(series_id, episode_id)
             return await _do_start_transcode(
-                url, content_type, series_id, episode_id, old_seek_offset, series_name, deinterlace_fallback
+                url,
+                content_type,
+                series_id,
+                episode_id,
+                old_seek_offset,
+                series_name,
+                deinterlace_fallback,
+                username,
+                source_id,
             )
         raise
 

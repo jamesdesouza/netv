@@ -297,8 +297,12 @@ class TestVod:
     def test_vod_shows_movies_from_cache(self, auth_client):
         import main
 
-        main._cache["vod_categories"] = [{"category_id": "10", "category_name": "Movies"}]
-        main._cache["vod_streams"] = [{"stream_id": 100, "name": "Movie 1", "category_id": "10"}]
+        main._cache["vod_categories"] = [
+            {"category_id": "10", "category_name": "Movies", "source_id": "src1"}
+        ]
+        main._cache["vod_streams"] = [
+            {"stream_id": 100, "name": "Movie 1", "category_id": "10", "source_id": "src1"}
+        ]
 
         resp = auth_client.get("/vod")
         assert resp.status_code == 200
@@ -307,12 +311,12 @@ class TestVod:
         import main
 
         main._cache["vod_categories"] = [
-            {"category_id": "10", "category_name": "Action"},
-            {"category_id": "20", "category_name": "Comedy"},
+            {"category_id": "10", "category_name": "Action", "source_id": "src1"},
+            {"category_id": "20", "category_name": "Comedy", "source_id": "src1"},
         ]
         main._cache["vod_streams"] = [
-            {"stream_id": 100, "name": "Action Movie", "category_id": "10"},
-            {"stream_id": 101, "name": "Comedy Movie", "category_id": "20"},
+            {"stream_id": 100, "name": "Action Movie", "category_id": "10", "source_id": "src1"},
+            {"stream_id": 101, "name": "Comedy Movie", "category_id": "20", "source_id": "src1"},
         ]
 
         resp = auth_client.get("/vod?category=10")
@@ -323,8 +327,8 @@ class TestVod:
 
         main._cache["vod_categories"] = []
         main._cache["vod_streams"] = [
-            {"stream_id": 1, "name": "Zebra"},
-            {"stream_id": 2, "name": "Apple"},
+            {"stream_id": 1, "name": "Zebra", "source_id": "src1"},
+            {"stream_id": 2, "name": "Apple", "source_id": "src1"},
         ]
 
         resp = auth_client.get("/vod?sort=alpha")
@@ -342,8 +346,12 @@ class TestSeries:
     def test_series_shows_list_from_cache(self, auth_client):
         import main
 
-        main._cache["series_categories"] = [{"category_id": "30", "category_name": "Drama"}]
-        main._cache["series"] = [{"series_id": 200, "name": "Show 1", "category_id": "30"}]
+        main._cache["series_categories"] = [
+            {"category_id": "30", "category_name": "Drama", "source_id": "src1"}
+        ]
+        main._cache["series"] = [
+            {"series_id": 200, "name": "Show 1", "category_id": "30", "source_id": "src1"}
+        ]
 
         resp = auth_client.get("/series")
         assert resp.status_code == 200

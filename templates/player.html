@@ -190,7 +190,8 @@ window.PLAYER_CONFIG = {
   ccLang: {{ cc_lang | tojson }},
   castHost: {{ cast_host | tojson }},
   isHttps: {{ (request.url.scheme == 'https') | tojson }},
-  deinterlaceFallback: {{ deinterlace_fallback | tojson }}
+  deinterlaceFallback: {{ deinterlace_fallback | tojson }},
+  sourceId: {{ source_id | tojson }}
 };
 </script>
 <script src="/static/js/player.js"></script>

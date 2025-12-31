@@ -84,6 +84,20 @@ def clear_all_caches() -> None:
             _cache["epg"] = epg
 
 
+def clear_all_file_caches() -> int:
+    """Clear all data file caches (live, vod, series). Returns count deleted."""
+    cache_files = ["live_data.json", "vod_data.json", "series_data.json"]
+    deleted = 0
+    for name in cache_files:
+        path = CACHE_DIR / name
+        if path.exists():
+            path.unlink()
+            deleted += 1
+    # Also clear memory cache
+    clear_all_caches()
+    return deleted
+
+
 def get_cache() -> dict[str, Any]:
     """Get reference to memory cache."""
     return _cache
@@ -256,6 +270,7 @@ class Source:
     epg_enabled: bool = True  # Whether to fetch EPG from this source
     epg_url: str = ""  # EPG URL (auto-detected from M3U/Xtream, or manual override)
     deinterlace_fallback: bool = True  # Deinterlace when probe is skipped (for OTA/HDHomeRun)
+    max_streams: int = 0  # Max concurrent streams from this source (0 = unlimited)
 
 
 def load_server_settings() -> dict[str, Any]:

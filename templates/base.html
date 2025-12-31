@@ -49,6 +49,8 @@
           <path d="M17.5 0.5 A 6 6 0 0 1 17.5 7.5" stroke-width="1"/>
         </svg>
       </a>
+      {% set access = content_access if content_access is defined else get_content_access_from_request(request) %}
+      {% if access.movies %}
       <a href="/vod" class="nav-link p-1.5 rounded hover:bg-gray-700 {% if request.url.path.startswith('/vod') %}active{% endif %}" tabindex="0" title="Movies">
         <svg class="w-6 h-6" fill="white" viewBox="0 0 24 24">
           <!-- Board -->
@@ -62,9 +64,12 @@
           </g>
         </svg>
       </a>
+      {% endif %}
+      {% if access.series %}
       <a href="/series" class="nav-link p-1.5 rounded hover:bg-gray-700 {% if request.url.path.startswith('/series') %}active{% endif %}" tabindex="0" title="Series">
         <svg class="w-6 h-6" fill="white" viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
       </a>
+      {% endif %}
       <a href="/search" class="nav-link p-1.5 rounded hover:bg-gray-700 {% if request.url.path == '/search' %}active{% endif %}" tabindex="0" title="Search">
         <svg class="w-6 h-6" fill="white" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
       </a>

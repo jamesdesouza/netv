@@ -163,9 +163,49 @@ def set_admin(username: str, admin: bool) -> bool:
 
 
 def get_users_with_admin() -> list[dict[str, Any]]:
-    """Get list of users with their admin status."""
+    """Get list of users with their admin status and limits."""
     users = _get_users()
-    return [{"username": u, "admin": d.get("admin", False)} for u, d in users.items()]
+    return [
+        {
+            "username": u,
+            "admin": d.get("admin", False),
+            "max_streams_per_source": d.get("max_streams_per_source", {}),
+            "unavailable_groups": d.get("unavailable_groups", []),
+        }
+        for u, d in users.items()
+    ]
+
+
+def get_user_limits(username: str) -> dict[str, Any]:
+    """Get user's stream limits and group restrictions."""
+    users = _get_users()
+    user_data = users.get(username, {})
+    return {
+        "max_streams_per_source": user_data.get("max_streams_per_source", {}),
+        "unavailable_groups": user_data.get("unavailable_groups", []),
+    }
+
+
+def set_user_limits(
+    username: str,
+    max_streams_per_source: dict[str, int] | None = None,
+    unavailable_groups: list[str] | None = None,
+) -> bool:
+    """Set user's stream limits and/or group restrictions. Returns True if successful."""
+    settings_file = _get_settings_file()
+    if not settings_file.exists():
+        return False
+    settings = json.loads(settings_file.read_text())
+    users = settings.get("users", {})
+    if username not in users:
+        return False
+    if max_streams_per_source is not None:
+        users[username]["max_streams_per_source"] = max_streams_per_source
+    if unavailable_groups is not None:
+        users[username]["unavailable_groups"] = unavailable_groups
+    settings["users"] = users
+    settings_file.write_text(json.dumps(settings, indent=2))
+    return True
 
 
 def create_token(payload: dict[str, Any]) -> str:

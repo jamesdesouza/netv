@@ -236,10 +236,17 @@ def load_all_live_data() -> tuple[list[dict], list[dict], list[tuple[str, int, s
 
 def _fetch_vod_data() -> tuple[list[dict], list[dict]]:
     """Fetch VOD categories and streams from first Xtream source."""
-    xtream = get_first_xtream_client()
+    source_id, xtream = get_first_xtream_source_and_client()
     if not xtream:
         return [], []
-    return xtream.get_vod_categories(), xtream.get_vod_streams()
+    cats = xtream.get_vod_categories()
+    streams = xtream.get_vod_streams()
+    # Add source_id for access control
+    for c in cats:
+        c["source_id"] = source_id
+    for s in streams:
+        s["source_id"] = source_id
+    return cats, streams
 
 
 def load_vod_data() -> tuple[list[dict], list[dict]]:
@@ -287,10 +294,17 @@ def load_vod_data() -> tuple[list[dict], list[dict]]:
 
 def _fetch_series_data() -> tuple[list[dict], list[dict]]:
     """Fetch series categories and list from first Xtream source."""
-    xtream = get_first_xtream_client()
+    source_id, xtream = get_first_xtream_source_and_client()
     if not xtream:
         return [], []
-    return xtream.get_series_categories(), xtream.get_series()
+    cats = xtream.get_series_categories()
+    series = xtream.get_series()
+    # Add source_id for access control
+    for c in cats:
+        c["source_id"] = source_id
+    for s in series:
+        s["source_id"] = source_id
+    return cats, series
 
 
 def load_series_data() -> tuple[list[dict], list[dict]]:
@@ -342,6 +356,14 @@ def get_first_xtream_client() -> XtreamClient | None:
         if source.type == "xtream":
             return XtreamClient(source.url, source.username, source.password)
     return None
+
+
+def get_first_xtream_source_and_client() -> tuple[str, XtreamClient] | tuple[None, None]:
+    """Get the first available Xtream source ID and client."""
+    for source in get_sources():
+        if source.type == "xtream":
+            return source.id, XtreamClient(source.url, source.username, source.password)
+    return None, None
 
 
 def get_fetch_lock(name: str) -> threading.Lock:
