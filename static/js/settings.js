@@ -25,7 +25,8 @@
       const resp = await fetch(url, options);
       showFeedback(feedbackEl, resp.ok);
       return resp;
-    } catch {
+    } catch (e) {
+      console.error('Save failed:', e);
       showFeedback(feedbackEl, false);
       return null;
     }
@@ -51,7 +52,7 @@
         chip.classList.add('opacity-50');
       });
       chip.addEventListener('dragend', () => {
-        chip?.classList.remove('opacity-50');
+        chip.classList.remove('opacity-50');
         draggedChip = null;
       });
       chip.addEventListener('dragover', e => {
@@ -162,7 +163,8 @@
         const data = await resp.json();
         if (msgEl) msgEl.textContent = data.detail || 'Failed';
       }
-    } catch {
+    } catch (e) {
+      console.error('Delete self failed:', e);
       if (msgEl) msgEl.textContent = 'Request failed';
     }
   };
@@ -276,7 +278,8 @@
       try {
         await navigator.clipboard.writeText(text);
         el.textContent = 'Copied!';
-      } catch {
+      } catch (e) {
+        console.error('Copy failed:', e);
         el.textContent = 'Failed';
       }
       setTimeout(() => el.textContent = orig, 1500);
@@ -399,7 +402,8 @@
           } else {
             refreshBtn.textContent = 'Failed';
           }
-        } catch {
+        } catch (e) {
+          console.error('Refresh encoders failed:', e);
           refreshBtn.textContent = 'Failed';
         }
         setTimeout(() => { refreshBtn.textContent = 'Re-detect Hardware'; refreshBtn.disabled = false; }, 1500);
@@ -480,7 +484,7 @@
                   <div class="flex-1 min-w-0">
                     <span class="font-medium truncate">${name}</span>
                     <span class="text-gray-400 ml-2">${s.episode_count} ep${s.episode_count > 1 ? 's' : ''}</span>
-                    <span class="text-gray-500 ml-2">${escapeHtml(s.video_codec)}/${escapeHtml(s.audio_codec)}</span>
+                    <span class="text-gray-500 ml-2">${escapeHtml(s.video_codec || '')}/${escapeHtml(s.audio_codec || '')}</span>
                     ${s.subtitle_count > 0 ? `<span class="text-gray-500 ml-1">+${s.subtitle_count} subs</span>` : ''}
                   </div>
                   <button class="clear-series px-2 py-1 text-xs bg-gray-600 hover:bg-red-600 rounded ml-2" data-series="${s.series_id}">Clear</button>
@@ -643,7 +647,8 @@
             const data = await resp.json();
             if (msgEl) { msgEl.textContent = data.detail || 'Failed'; msgEl.className = 'text-sm text-red-400'; }
           }
-        } catch {
+        } catch (e) {
+          console.error('Add user failed:', e);
           if (msgEl) { msgEl.textContent = 'Request failed'; msgEl.className = 'text-sm text-red-400'; }
         }
         msgEl?.classList.remove('hidden');
@@ -677,7 +682,8 @@
           const resp = await fetch(`/settings/users/admin/${username}`, { method: 'POST', body: form });
           if (resp.ok) location.reload();
           else this.checked = !this.checked;
-        } catch {
+        } catch (e) {
+          console.error('Admin toggle failed:', e);
           this.checked = !this.checked;
         }
       });

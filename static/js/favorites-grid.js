@@ -7,6 +7,16 @@
   const cfg = window.FAVORITES_CONFIG;
   if (!cfg) return;
 
+  function escapeHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function escapeAttr(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   window.favorites = cfg.favorites;
 
   function getFavorites() {
@@ -68,7 +78,7 @@
         const resp = await fetch('/api/settings');
         const settings = await resp.json();
         return settings[cfg.orderKey] || [];
-      } catch { return []; }
+      } catch (e) { console.error('Failed to get order:', e); return []; }
     }
 
     async function saveOrder(order) {
@@ -81,7 +91,9 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(settings)
         });
-      } catch (e) { console.error('Failed to save order:', e); }
+      } catch (e) {
+        console.error('Failed to save order:', e);
+      }
     }
 
     window.renderFavorites = async function() {
@@ -104,17 +116,20 @@
       noFavs.classList.add('hidden');
       grid.innerHTML = ids.map(id => {
         const f = favs[id];
+        const safeId = escapeAttr(id);
+        const safeCover = escapeAttr(f.cover);
+        const safeName = escapeHtml(f.name);
         return `
-          <div class="${cfg.tileClass}" data-id="${id}">
-            <a href="${cfg.detailUrl}${id}" class="block bg-gray-800 rounded-lg overflow-hidden hover:ring-2 hover:ring-blue-500 focus:ring-2 focus:ring-blue-500 focusable group relative"
+          <div class="${cfg.tileClass}" data-id="${safeId}">
+            <a href="${cfg.detailUrl}${encodeURIComponent(id)}" class="block bg-gray-800 rounded-lg overflow-hidden hover:ring-2 hover:ring-blue-500 focus:ring-2 focus:ring-blue-500 focusable group relative"
                tabindex="0" data-nav="grid">
               <div class="aspect-[2/3] bg-gray-700">
-                ${f.cover ? `<img src="${f.cover}" class="w-full h-full object-cover" loading="lazy">` : ''}
+                ${f.cover ? `<img src="${safeCover}" class="w-full h-full object-cover" loading="lazy">` : ''}
               </div>
               <button class="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/50 text-xl text-yellow-400 opacity-0 group-hover:opacity-100 focus:opacity-100 z-10 focusable"
                       tabindex="0"
-                      onclick="event.preventDefault(); event.stopPropagation(); toggleFavorite('${id}', '', '', '');">★</button>
-              <div class="p-2 text-sm line-clamp-2">${f.name}</div>
+                      onclick="event.preventDefault(); event.stopPropagation(); toggleFavorite('${safeId}', '', '', '');">★</button>
+              <div class="p-2 text-sm line-clamp-2">${safeName}</div>
             </a>
           </div>
         `;

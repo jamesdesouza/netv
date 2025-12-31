@@ -186,7 +186,7 @@
         moveFocus(dir);
         break;
 
-      case 'Enter':
+      case 'Enter': {
         const el = document.activeElement;
         if (el?.href) {
           e.preventDefault();
@@ -200,6 +200,7 @@
           el.click();
         }
         break;
+      }
 
       case 'f':
       case 'F':
