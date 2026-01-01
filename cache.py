@@ -180,8 +180,8 @@ def detect_encoders() -> dict[str, bool]:
     log.info("Detecting hardware encoders...")
     encoders = {
         "nvidia": False,
-        "intel": False,
-        "vaapi": False,
+        "radeon": False,
+        "integrated": False,
         "software": False,
     }
 
@@ -198,21 +198,15 @@ def detect_encoders() -> dict[str, bool]:
     else:
         log.info("  NVIDIA (h264_nvenc): unavailable - %s", err)
 
-    # Intel QSV: needs hwaccel init
-    ok, err = _test_encoder(
-        base_cmd
-        + ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
-        + test_input
-        + ["-c:v", "h264_qsv"]
-        + null_out
-    )
-    encoders["intel"] = ok
+    # Radeon: AMD discrete GPU via AMF encoder
+    ok, err = _test_encoder(base_cmd + test_input + ["-c:v", "h264_amf"] + null_out)
+    encoders["radeon"] = ok
     if ok:
-        log.info("  Intel (h264_qsv): available")
+        log.info("  Radeon (h264_amf): available")
     else:
-        log.info("  Intel (h264_qsv): unavailable - %s", err)
+        log.info("  Radeon (h264_amf): unavailable - %s", err)
 
-    # VA-API: needs device and hwupload
+    # Integrated: Intel/AMD integrated GPU via VA-API
     ok, err = _test_encoder(
         base_cmd
         + ["-vaapi_device", "/dev/dri/renderD128"]
@@ -220,11 +214,11 @@ def detect_encoders() -> dict[str, bool]:
         + ["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]
         + null_out
     )
-    encoders["vaapi"] = ok
+    encoders["integrated"] = ok
     if ok:
-        log.info("  VA-API (h264_vaapi): available")
+        log.info("  Integrated (h264_vaapi): available")
     else:
-        log.info("  VA-API (h264_vaapi): unavailable - %s", err)
+        log.info("  Integrated (h264_vaapi): unavailable - %s", err)
 
     # Software: libx264
     ok, err = _test_encoder(
@@ -250,8 +244,8 @@ def refresh_encoders() -> dict[str, bool]:
 
 
 def _default_encoder() -> str:
-    """Return first available encoder, preferring most specific."""
-    for enc in ("nvidia", "intel", "vaapi", "software"):
+    """Return first available encoder, preferring discrete GPUs."""
+    for enc in ("nvidia", "radeon", "integrated", "software"):
         if AVAILABLE_ENCODERS.get(enc):
             return enc
     return "software"

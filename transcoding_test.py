@@ -30,7 +30,7 @@ class FakeMediaInfo:
 class TestBuildVideoArgs:
     """Tests for _build_video_args."""
 
-    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    @pytest.mark.parametrize("hw", ["nvidia", "radeon", "integrated", "software"])
     @pytest.mark.parametrize("deinterlace", [True, False])
     @pytest.mark.parametrize("max_resolution", ["1080p", "720p", "4k"])
     def test_all_hw_combinations(self, hw: HwAccel, deinterlace: bool, max_resolution: str):
@@ -47,10 +47,10 @@ class TestBuildVideoArgs:
         # Pre args: hw accelerators have hwaccel, software has none
         if hw == "nvidia":
             assert pre == [] or "-hwaccel" in pre
-        elif hw == "intel":
+        elif hw == "radeon":
             assert "-hwaccel" in pre
-            assert "qsv" in pre
-        elif hw == "vaapi":
+            assert "vaapi" in pre
+        elif hw == "integrated":
             assert "-hwaccel" in pre
             assert "vaapi" in pre
         else:
@@ -62,7 +62,7 @@ class TestBuildVideoArgs:
         assert "-g" in post
         assert "60" in post
 
-    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    @pytest.mark.parametrize("hw", ["nvidia", "radeon", "integrated", "software"])
     def test_copy_video(self, hw: HwAccel):
         """Test copy_video returns minimal args."""
         pre, post = _build_video_args(
@@ -106,11 +106,11 @@ class TestBuildVideoArgs:
         assert "yadif=1" in vf
         assert "cuda" not in vf
 
-    def test_vaapi_filters(self):
-        """Test VAAPI uses VAAPI filters."""
+    def test_integrated_filters(self):
+        """Test integrated GPU uses VAAPI filters."""
         pre, post = _build_video_args(
             copy_video=False,
-            hw="vaapi",
+            hw="integrated",
             deinterlace=True,
             use_hw_pipeline=True,
             max_resolution="1080p",
@@ -120,19 +120,21 @@ class TestBuildVideoArgs:
         assert "deinterlace_vaapi" in vf
         assert "scale_vaapi" in vf
 
-    def test_intel_filters(self):
-        """Test Intel uses QSV filters."""
+    def test_radeon_filters(self):
+        """Test Radeon uses VAAPI decode and AMF encode."""
         pre, post = _build_video_args(
             copy_video=False,
-            hw="intel",
+            hw="radeon",
             deinterlace=True,
             use_hw_pipeline=True,
             max_resolution="1080p",
             quality="high",
         )
         vf = post[post.index("-vf") + 1]
-        assert "vpp_qsv" in vf
-        assert "scale_qsv" in vf
+        assert "deinterlace_vaapi" in vf
+        assert "scale_vaapi" in vf
+        assert "-c:v" in post
+        assert post[post.index("-c:v") + 1] == "h264_amf"
 
     def test_software_filters(self):
         """Test software uses yadif and scale."""
@@ -155,7 +157,7 @@ class TestBuildVideoArgs:
         """Test quality presets map to correct QP values."""
         _, post = _build_video_args(
             copy_video=False,
-            hw="vaapi",
+            hw="integrated",
             deinterlace=False,
             use_hw_pipeline=True,
             max_resolution="1080p",
@@ -203,7 +205,7 @@ class TestBuildAudioArgs:
 class TestBuildHlsFfmpegCmd:
     """Tests for build_hls_ffmpeg_cmd."""
 
-    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    @pytest.mark.parametrize("hw", ["nvidia", "radeon", "integrated", "software"])
     @pytest.mark.parametrize("is_vod", [True, False])
     def test_command_structure(self, hw: HwAccel, is_vod: bool):
         """Test command has correct structure for all hw/vod combinations."""
@@ -254,7 +256,7 @@ class TestBuildHlsFfmpegCmd:
         media = FakeMediaInfo(video_codec="h264", pix_fmt="yuv420p", height=1080)
         cmd = build_hls_ffmpeg_cmd(
             "http://test",
-            "vaapi",
+            "integrated",
             "/tmp",
             is_vod=True,
             media_info=media,  # type: ignore
@@ -270,7 +272,7 @@ class TestBuildHlsFfmpegCmd:
         media = FakeMediaInfo(video_codec="h264", pix_fmt="yuv420p10le", height=1080)
         cmd = build_hls_ffmpeg_cmd(
             "http://test",
-            "vaapi",
+            "integrated",
             "/tmp",
             is_vod=True,
             media_info=media,  # type: ignore
@@ -283,7 +285,7 @@ class TestBuildHlsFfmpegCmd:
         media = FakeMediaInfo(video_codec="h264", pix_fmt="yuv420p", height=2160)
         cmd = build_hls_ffmpeg_cmd(
             "http://test",
-            "vaapi",
+            "integrated",
             "/tmp",
             is_vod=True,
             media_info=media,  # type: ignore
@@ -334,7 +336,7 @@ class TestAspectRatioHandling:
         media = FakeMediaInfo(height=input_height, pix_fmt="yuv420p10le")
         cmd = build_hls_ffmpeg_cmd(
             "http://test",
-            "vaapi",
+            "integrated",
             "/tmp",
             is_vod=True,
             media_info=media,  # type: ignore

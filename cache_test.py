@@ -96,7 +96,7 @@ class TestSettings:
         settings = cache_module.load_server_settings()
         assert settings["sources"] == []
         assert settings["transcode_mode"] == "auto"
-        assert settings["transcode_hw"] in ("nvidia", "intel", "vaapi", "software")
+        assert settings["transcode_hw"] in ("nvidia", "radeon", "integrated", "software")
         assert settings["probe_movies"] is True
 
     def test_save_and_load_settings(self, cache_module):
@@ -245,8 +245,8 @@ class TestEncoderDetection:
             result = cache.detect_encoders()
             assert result == {
                 "nvidia": True,
-                "intel": True,
-                "vaapi": True,
+                "radeon": True,
+                "integrated": True,
                 "software": True,
             }
 
@@ -256,8 +256,8 @@ class TestEncoderDetection:
             result = cache.detect_encoders()
             assert result == {
                 "nvidia": False,
-                "intel": False,
-                "vaapi": False,
+                "radeon": False,
+                "integrated": False,
                 "software": False,
             }
 
@@ -273,8 +273,8 @@ class TestEncoderDetection:
         with mock.patch.object(cache, "_test_encoder", side_effect=mock_test):
             result = cache.detect_encoders()
             assert result["nvidia"] is False
-            assert result["intel"] is False
-            assert result["vaapi"] is False
+            assert result["radeon"] is False
+            assert result["integrated"] is False
             assert result["software"] is True
 
     def test_detect_encoders_nvidia_only(self):
@@ -288,12 +288,12 @@ class TestEncoderDetection:
         with mock.patch.object(cache, "_test_encoder", side_effect=mock_test):
             result = cache.detect_encoders()
             assert result["nvidia"] is True
-            assert result["intel"] is False
-            assert result["vaapi"] is False
+            assert result["radeon"] is False
+            assert result["integrated"] is False
             assert result["software"] is False
 
-    def test_detect_encoders_vaapi_command_structure(self):
-        """Test detect_encoders passes correct VAAPI command structure."""
+    def test_detect_encoders_integrated_command_structure(self):
+        """Test detect_encoders passes correct VAAPI command structure for integrated."""
         captured_cmds = []
 
         def capture_cmd(cmd, timeout=5):
@@ -303,28 +303,11 @@ class TestEncoderDetection:
         with mock.patch.object(cache, "_test_encoder", side_effect=capture_cmd):
             cache.detect_encoders()
 
-        # Find VAAPI command
+        # Find VAAPI command (used for integrated)
         vaapi_cmd = [c for c in captured_cmds if "h264_vaapi" in c][0]
         assert "-vaapi_device" in vaapi_cmd
         assert "/dev/dri/renderD128" in vaapi_cmd
         assert "hwupload" in " ".join(vaapi_cmd)
-
-    def test_detect_encoders_intel_command_structure(self):
-        """Test detect_encoders passes correct Intel QSV command structure."""
-        captured_cmds = []
-
-        def capture_cmd(cmd, timeout=5):
-            captured_cmds.append(cmd)
-            return False, "test"
-
-        with mock.patch.object(cache, "_test_encoder", side_effect=capture_cmd):
-            cache.detect_encoders()
-
-        # Find Intel QSV command
-        intel_cmd = [c for c in captured_cmds if "h264_qsv" in c][0]
-        assert "-hwaccel" in intel_cmd
-        assert "qsv" in intel_cmd
-        assert "-hwaccel_output_format" in intel_cmd
 
     def test_refresh_encoders_updates_global(self):
         """Test refresh_encoders updates AVAILABLE_ENCODERS."""
@@ -333,13 +316,13 @@ class TestEncoderDetection:
         with mock.patch.object(
             cache,
             "detect_encoders",
-            return_value={"nvidia": True, "intel": True, "vaapi": True, "software": True},
+            return_value={"nvidia": True, "radeon": True, "integrated": True, "software": True},
         ):
             result = cache.refresh_encoders()
             assert cache.AVAILABLE_ENCODERS == {
                 "nvidia": True,
-                "intel": True,
-                "vaapi": True,
+                "radeon": True,
+                "integrated": True,
                 "software": True,
             }
             assert result == cache.AVAILABLE_ENCODERS
@@ -352,8 +335,8 @@ class TestEncoderDetection:
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
             "nvidia": True,
-            "intel": True,
-            "vaapi": True,
+            "radeon": True,
+            "integrated": True,
             "software": True,
         }
         try:
@@ -361,31 +344,31 @@ class TestEncoderDetection:
         finally:
             cache.AVAILABLE_ENCODERS = original
 
-    def test_default_encoder_falls_back_to_intel(self):
-        """Test _default_encoder falls back to Intel when NVIDIA unavailable."""
+    def test_default_encoder_falls_back_to_radeon(self):
+        """Test _default_encoder falls back to Radeon when NVIDIA unavailable."""
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
             "nvidia": False,
-            "intel": True,
-            "vaapi": True,
+            "radeon": True,
+            "integrated": True,
             "software": True,
         }
         try:
-            assert cache._default_encoder() == "intel"
+            assert cache._default_encoder() == "radeon"
         finally:
             cache.AVAILABLE_ENCODERS = original
 
-    def test_default_encoder_falls_back_to_vaapi(self):
-        """Test _default_encoder falls back to VAAPI when NVIDIA/Intel unavailable."""
+    def test_default_encoder_falls_back_to_integrated(self):
+        """Test _default_encoder falls back to integrated when discrete unavailable."""
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
             "nvidia": False,
-            "intel": False,
-            "vaapi": True,
+            "radeon": False,
+            "integrated": True,
             "software": True,
         }
         try:
-            assert cache._default_encoder() == "vaapi"
+            assert cache._default_encoder() == "integrated"
         finally:
             cache.AVAILABLE_ENCODERS = original
 
@@ -394,8 +377,8 @@ class TestEncoderDetection:
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
             "nvidia": False,
-            "intel": False,
-            "vaapi": False,
+            "radeon": False,
+            "integrated": False,
             "software": True,
         }
         try:
@@ -408,8 +391,8 @@ class TestEncoderDetection:
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
             "nvidia": False,
-            "intel": False,
-            "vaapi": False,
+            "radeon": False,
+            "integrated": False,
             "software": False,
         }
         try:

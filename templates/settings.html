@@ -373,11 +373,17 @@
                    class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
             <span>NVIDIA</span>
           </label>
-          <label class="flex items-center gap-2 text-sm {% if not available_encoders.vaapi %}opacity-40{% endif %}">
-            <input type="radio" name="transcode_hw" value="vaapi" {% if transcode_hw == 'vaapi' %}checked{% endif %}
-                   {% if not available_encoders.vaapi %}disabled{% endif %}
+          <label class="flex items-center gap-2 text-sm {% if not available_encoders.radeon %}opacity-40{% endif %}">
+            <input type="radio" name="transcode_hw" value="radeon" {% if transcode_hw == 'radeon' %}checked{% endif %}
+                   {% if not available_encoders.radeon %}disabled{% endif %}
                    class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-            <span>Intel/AMD (VA-API)</span>
+            <span>Radeon</span>
+          </label>
+          <label class="flex items-center gap-2 text-sm {% if not available_encoders.integrated %}opacity-40{% endif %}">
+            <input type="radio" name="transcode_hw" value="integrated" {% if transcode_hw == 'integrated' %}checked{% endif %}
+                   {% if not available_encoders.integrated %}disabled{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>Integrated</span>
           </label>
           <label class="flex items-center gap-2 text-sm {% if not available_encoders.software %}opacity-40{% endif %}">
             <input type="radio" name="transcode_hw" value="software" {% if transcode_hw == 'software' %}checked{% endif %}

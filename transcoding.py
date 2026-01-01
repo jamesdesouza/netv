@@ -24,8 +24,8 @@ from fastapi import HTTPException
 
 HwAccel = Literal[
     "nvidia",
-    "intel",
-    "vaapi",
+    "radeon",
+    "integrated",
     "software",
 ]
 
@@ -670,9 +670,9 @@ def _build_video_args(
     max_h = _MAX_RES_HEIGHT.get(max_resolution)
     qp = _QUALITY_QP.get(quality, 28)
 
-    # Check if SR should be applied (VOD only, NVIDIA only for now)
+    # Check if SR should be applied (VOD only, discrete GPUs)
     sr_filter = ""
-    if sr_mode != "off" and hw == "nvidia" and _sr_model_path:
+    if sr_mode != "off" and hw in ("nvidia", "radeon") and _sr_model_path:
         sr_filter = _build_sr_filter(sr_mode, source_height, max_h or 0)
 
     if hw == "nvidia":
@@ -708,7 +708,39 @@ def _build_video_args(
         encoder = "h264_nvenc"
         enc_opts = ["-preset", preset, "-rc", "constqp", "-qp", str(qp)]
 
-    elif hw == "vaapi":
+    elif hw == "radeon":
+        # Radeon: Use VAAPI for decode/scale, AMF for encode
+        if not sr_filter:
+            # Full hardware pipeline via VAAPI
+            pre = [
+                "-hwaccel",
+                "vaapi",
+                "-hwaccel_output_format",
+                "vaapi",
+                "-hwaccel_device",
+                "/dev/dri/renderD128",
+            ]
+            h = f"'min(ih,{max_h})'" if max_h else None
+            scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
+            # Note: deinterlace_vaapi + hwdownload for AMF encoding
+            if deinterlace:
+                vf = f"deinterlace_vaapi,{scale},hwdownload,format=nv12"
+            else:
+                vf = f"{scale},hwdownload,format=nv12"
+        else:
+            # Software decode for SR
+            pre = []
+            filters = []
+            if deinterlace:
+                filters.append("yadif=1")
+            filters.append(sr_filter)
+            filters.append("format=nv12")
+            vf = ",".join(filters)
+        encoder = "h264_amf"
+        enc_opts = ["-quality", "balanced", "-rc", "cqp", "-qp_i", str(qp), "-qp_p", str(qp)]
+
+    elif hw == "integrated":
+        # Integrated GPU (Intel/AMD) via VA-API
         pre = [
             "-hwaccel",
             "vaapi",
@@ -722,14 +754,6 @@ def _build_video_args(
         vf = f"deinterlace_vaapi,{scale}" if deinterlace else scale
         encoder = "h264_vaapi"
         enc_opts = ["-rc_mode", "CQP", "-qp", str(qp)]
-
-    elif hw == "intel":
-        pre = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
-        h = f"'min(ih,{max_h})'" if max_h else None
-        scale = f"scale_qsv=w=-2:h={h}:format=nv12" if h else "scale_qsv=format=nv12"
-        vf = f"vpp_qsv=deinterlace=2,{scale}" if deinterlace else scale
-        encoder = "h264_qsv"
-        enc_opts = ["-preset", "medium", "-global_quality", str(qp)]
 
     elif hw == "software":
         pre = []
@@ -802,7 +826,7 @@ def build_hls_ffmpeg_cmd(
     use_hw_pipeline = bool(
         not copy_video
         and not sr_active
-        and hw in ("nvidia", "intel", "vaapi")
+        and hw in ("nvidia", "radeon", "integrated")
         and (hw != "nvidia" or (media_info and media_info.video_codec in _get_gpu_nvdec_codecs()))
     )
 

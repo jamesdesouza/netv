@@ -1,37 +1,62 @@
 #!/bin/bash
-# Build ffmpeg from source with NVIDIA NVENC support
+# Build ffmpeg from source with NVIDIA + AMD hardware acceleration
+# Supports: NVENC, CUVID, AMF, VAAPI, and LibTorch (CUDA/ROCm) for SR
 # https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu
 set -e
 
-# Build from source for latest versions and -march=native optimizations (set to 0 for apt packages)
+# Build options
 BUILD_LIBAOM=${BUILD_LIBAOM:-0}
 BUILD_NV_HEADERS=${BUILD_NV_HEADERS:-1}
+BUILD_AMF_HEADERS=${BUILD_AMF_HEADERS:-1}
 
 # Enable LibTorch for DNN super-resolution
-# Set ENABLE_LIBTORCH=1 to enable. Will auto-detect existing PyTorch installation.
 ENABLE_LIBTORCH=${ENABLE_LIBTORCH:-0}
+# LibTorch backend: "cuda", "rocm", or "auto" (use what's in LIBTORCH_DIR)
+LIBTORCH_BACKEND="${LIBTORCH_BACKEND:-auto}"
 
 # Build paths
 SRC_DIR="${SRC_DIR:-$HOME/ffmpeg_sources}"
 BUILD_DIR="${BUILD_DIR:-$HOME/ffmpeg_build}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-
-# LibTorch path - auto-detect from pip-installed PyTorch or use standalone
 LIBTORCH_DIR="${LIBTORCH_DIR:-}"
 
 NPROC=$(nproc)
 
-# Add CUDA repo if not present
+# Detect GPUs
+HAS_NVIDIA=$(lspci | grep -qi nvidia && echo 1 || echo 0)
+HAS_AMD=$(lspci | grep -qiE "radeon|instinct|1002:" && echo 1 || echo 0)
+echo "Detected: NVIDIA=$HAS_NVIDIA AMD=$HAS_AMD"
+
+# ============================================================================
+# NVIDIA CUDA Repository
+# ============================================================================
+echo "Setting up NVIDIA CUDA..."
 if ! dpkg -l cuda-keyring 2>/dev/null | grep -q ^ii; then
   wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
   sudo dpkg -i cuda-keyring_1.1-1_all.deb
   rm cuda-keyring_1.1-1_all.deb
   sudo apt-get update
 fi
-
-# Get CUDA version (override with CUDA_VERSION env var for older GPUs, e.g., CUDA_VERSION=12-9)
 CUDA_VERSION=${CUDA_VERSION:-$(apt-cache search '^cuda-nvcc-[0-9]' | sed 's/cuda-nvcc-//' | cut -d' ' -f1 | sort -V | tail -1)}
-echo "Using CUDA version: $CUDA_VERSION"
+echo "CUDA version: $CUDA_VERSION"
+
+# ============================================================================
+# AMD ROCm Repository
+# ============================================================================
+echo "Setting up AMD ROCm..."
+if [ ! -f /etc/apt/sources.list.d/rocm.list ]; then
+  sudo mkdir -p /etc/apt/keyrings
+  curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/rocm.gpg
+  UBUNTU_CODENAME=$(lsb_release -cs)
+  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/7.1.1 ${UBUNTU_CODENAME} main" | sudo tee /etc/apt/sources.list.d/rocm.list
+  # Pin AMD repo higher to avoid conflicts with Ubuntu's older ROCm packages
+  echo 'Package: *
+Pin: origin repo.radeon.com
+Pin-Priority: 600' | sudo tee /etc/apt/preferences.d/rocm-pin-600
+  sudo apt-get update
+fi
+ROCM_VERSION="7.1.1"
+echo "ROCm version: $ROCM_VERSION"
 
 sudo apt install -y \
   autoconf \
@@ -78,7 +103,19 @@ sudo apt install -y \
   libxcb1-dev \
   zlib1g-dev \
   cuda-nvcc-$CUDA_VERSION \
-  cuda-cudart-dev-$CUDA_VERSION
+  cuda-cudart-dev-$CUDA_VERSION \
+  rocm-hip-runtime \
+  rocm-dev \
+  libdrm-dev \
+  libdrm-amdgpu1 \
+  opencl-headers \
+  ocl-icd-opencl-dev
+
+# Add user to video/render groups for AMD GPU access
+if ! groups | grep -q render; then
+  sudo usermod -aG video,render $USER
+  echo "Added $USER to video,render groups (reboot required for AMD GPU access)"
+fi
 
 mkdir -p "$SRC_DIR"
 
@@ -116,13 +153,22 @@ ninja &&
 ninja install
 
 
-# nv-codec-headers (optional - system package is usually sufficient)
+# nv-codec-headers (NVIDIA NVENC/NVDEC)
 if [ "$BUILD_NV_HEADERS" = "1" ]; then
   cd "$SRC_DIR" &&
   git -C nv-codec-headers pull 2> /dev/null || git clone --depth 1 https://git.videolan.org/git/ffmpeg/nv-codec-headers.git &&
   cd nv-codec-headers &&
   make &&
   make PREFIX="$BUILD_DIR" install
+fi
+
+# AMF headers (AMD Advanced Media Framework for h264_amf/hevc_amf encoders)
+if [ "$BUILD_AMF_HEADERS" = "1" ]; then
+  cd "$SRC_DIR" &&
+  git -C AMF pull 2> /dev/null || git clone --depth 1 https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git &&
+  mkdir -p "$BUILD_DIR/include/AMF" &&
+  cp -r AMF/amf/public/include/* "$BUILD_DIR/include/AMF/"
+  echo "AMF headers installed to $BUILD_DIR/include/AMF"
 fi
 
 # LibTorch for DNN super-resolution
@@ -135,36 +181,61 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
     fi
     echo "Using LibTorch at: $LIBTORCH_DIR"
   else
-    # Download standalone LibTorch
+    # Download standalone LibTorch - pick backend based on available GPU or preference
     LIBTORCH_DIR="$BUILD_DIR/libtorch"
     LIBTORCH_VERSION="${LIBTORCH_VERSION:-2.5.1}"
-    LIBTORCH_CUDA="${LIBTORCH_CUDA:-cu124}"
+
+    # Auto-detect backend if not specified
+    if [ "$LIBTORCH_BACKEND" = "auto" ]; then
+      if [ "$HAS_AMD" = "1" ] && [ "$HAS_NVIDIA" = "0" ]; then
+        LIBTORCH_BACKEND="rocm"
+      else
+        LIBTORCH_BACKEND="cuda"
+      fi
+    fi
 
     if [ ! -f "$LIBTORCH_DIR/lib/libtorch.so" ]; then
-      echo "Downloading LibTorch ${LIBTORCH_VERSION} (${LIBTORCH_CUDA})..."
       cd "$SRC_DIR"
-      LIBTORCH_URL="https://download.pytorch.org/libtorch/${LIBTORCH_CUDA}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${LIBTORCH_CUDA}.zip"
+      if [ "$LIBTORCH_BACKEND" = "rocm" ]; then
+        # ROCm LibTorch
+        LIBTORCH_ROCM="${LIBTORCH_ROCM:-rocm6.2}"
+        echo "Downloading LibTorch ${LIBTORCH_VERSION} (${LIBTORCH_ROCM})..."
+        LIBTORCH_URL="https://download.pytorch.org/libtorch/${LIBTORCH_ROCM}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${LIBTORCH_ROCM}.zip"
+      else
+        # CUDA LibTorch
+        LIBTORCH_CUDA="${LIBTORCH_CUDA:-cu124}"
+        echo "Downloading LibTorch ${LIBTORCH_VERSION} (${LIBTORCH_CUDA})..."
+        LIBTORCH_URL="https://download.pytorch.org/libtorch/${LIBTORCH_CUDA}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${LIBTORCH_CUDA}.zip"
+      fi
       wget -q --show-progress -O "libtorch.zip" "$LIBTORCH_URL"
       echo "Extracting..."
       unzip -q -o "libtorch.zip" -d "$BUILD_DIR"
       rm "libtorch.zip"
     fi
-    echo "Using LibTorch at: $LIBTORCH_DIR"
+    echo "Using LibTorch at: $LIBTORCH_DIR (backend: $LIBTORCH_BACKEND)"
   fi
 fi
 
-# CUDA flags (always enabled since we install CUDA packages)
+# ============================================================================
+# GPU Encoder Flags
+# ============================================================================
+# NVIDIA: NVENC/NVDEC
 CUDA_FLAGS="--enable-cuda-nvcc --enable-nvenc --enable-cuvid"
 NVCC_GENCODE=""
-
-# Detect GPU compute capability for optimized nvcc flags
 if command -v nvidia-smi &> /dev/null; then
-  COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)
+  COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1)
   if [ -n "$COMPUTE_CAP" ]; then
     COMPUTE_CAP_NUM=$(echo $COMPUTE_CAP | tr -d '.')
     NVCC_GENCODE="-gencode arch=compute_${COMPUTE_CAP_NUM},code=sm_${COMPUTE_CAP_NUM}"
-    echo "Detected NVIDIA GPU with compute capability ${COMPUTE_CAP} (sm_${COMPUTE_CAP_NUM})"
+    echo "Detected NVIDIA GPU: compute ${COMPUTE_CAP} (sm_${COMPUTE_CAP_NUM})"
   fi
+fi
+
+# AMD: AMF (always enable if headers are installed)
+AMF_FLAGS=""
+if [ -d "$BUILD_DIR/include/AMF" ]; then
+  AMF_FLAGS="--enable-amf"
+  echo "AMD AMF headers found - enabling h264_amf/hevc_amf encoders"
 fi
 
 # ffmpeg
@@ -239,7 +310,9 @@ CONFIGURE_CMD=(
   --enable-vaapi
   --enable-libvpl
   --enable-nonfree
+  --enable-opencl
   $CUDA_FLAGS
+  $AMF_FLAGS
   $LIBTORCH_FLAGS
 )
 
