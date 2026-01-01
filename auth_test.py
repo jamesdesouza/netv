@@ -13,9 +13,6 @@ import pytest
 @pytest.fixture
 def auth_module(tmp_path: Path):
     """Import auth module with temp settings file."""
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).parent))
     import auth
 
     # Patch settings files to temp location

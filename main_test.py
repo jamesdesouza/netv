@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import sys
+import json
 
 import pytest
 
-
-sys.path.insert(0, str(Path(__file__).parent))
+import cache as cache_module
+import m3u as m3u_module
 
 
 @pytest.fixture
@@ -42,13 +42,13 @@ def client(tmp_path: Path, mock_deps):
         patch("auth.USERS_DIR", tmp_path / "users"),
         patch("epg_db.init"),
         patch("transcoding.init"),
-        patch("transcoding.recover_vod_sessions"),
+        patch("transcoding.cleanup_and_recover_sessions"),
     ):
         (tmp_path / "users").mkdir(exist_ok=True)
         import main
 
         # Disable background loading
-        main._cache.clear()
+        cache_module.get_cache().clear()
         yield TestClient(main.app)
 
 
@@ -66,13 +66,13 @@ def auth_client(tmp_path: Path, mock_deps):
         patch("auth.USERS_DIR", tmp_path / "users"),
         patch("epg_db.init"),
         patch("transcoding.init"),
-        patch("transcoding.recover_vod_sessions"),
+        patch("transcoding.cleanup_and_recover_sessions"),
     ):
         (tmp_path / "users").mkdir(exist_ok=True)
         import auth
         import main
 
-        main._cache.clear()
+        cache_module.get_cache().clear()
         client = TestClient(main.app)
 
         # Create user and get token
@@ -258,10 +258,10 @@ class TestGuide:
             assert b"loading" in resp.content.lower() or b"Loading" in resp.content
 
     def test_guide_shows_channels_from_cache(self, auth_client):
-        import main
-
-        main._cache["live_categories"] = [{"category_id": "1", "category_name": "News"}]
-        main._cache["live_streams"] = [
+        cache_module.get_cache()["live_categories"] = [
+            {"category_id": "1", "category_name": "News"}
+        ]
+        cache_module.get_cache()["live_streams"] = [
             {"stream_id": 1, "name": "CNN", "category_ids": ["1"], "epg_channel_id": ""}
         ]
 
@@ -272,14 +272,10 @@ class TestGuide:
     def test_guide_redirects_to_saved_filter(self, auth_client, tmp_path):
         user_dir = tmp_path / "users" / "testuser"
         user_dir.mkdir(parents=True, exist_ok=True)
-        import json
-
         (user_dir / "settings.json").write_text(json.dumps({"guide_filter": ["1", "2"]}))
 
-        import main
-
-        main._cache["live_categories"] = []
-        main._cache["live_streams"] = []
+        cache_module.get_cache()["live_categories"] = []
+        cache_module.get_cache()["live_streams"] = []
 
         resp = auth_client.get("/guide", follow_redirects=False)
         assert resp.status_code == 303
@@ -295,12 +291,10 @@ class TestVod:
             assert resp.status_code == 200
 
     def test_vod_shows_movies_from_cache(self, auth_client):
-        import main
-
-        main._cache["vod_categories"] = [
+        cache_module.get_cache()["vod_categories"] = [
             {"category_id": "10", "category_name": "Movies", "source_id": "src1"}
         ]
-        main._cache["vod_streams"] = [
+        cache_module.get_cache()["vod_streams"] = [
             {"stream_id": 100, "name": "Movie 1", "category_id": "10", "source_id": "src1"}
         ]
 
@@ -308,13 +302,11 @@ class TestVod:
         assert resp.status_code == 200
 
     def test_vod_filters_by_category(self, auth_client):
-        import main
-
-        main._cache["vod_categories"] = [
+        cache_module.get_cache()["vod_categories"] = [
             {"category_id": "10", "category_name": "Action", "source_id": "src1"},
             {"category_id": "20", "category_name": "Comedy", "source_id": "src1"},
         ]
-        main._cache["vod_streams"] = [
+        cache_module.get_cache()["vod_streams"] = [
             {"stream_id": 100, "name": "Action Movie", "category_id": "10", "source_id": "src1"},
             {"stream_id": 101, "name": "Comedy Movie", "category_id": "20", "source_id": "src1"},
         ]
@@ -323,10 +315,8 @@ class TestVod:
         assert resp.status_code == 200
 
     def test_vod_sorts_by_alpha(self, auth_client):
-        import main
-
-        main._cache["vod_categories"] = []
-        main._cache["vod_streams"] = [
+        cache_module.get_cache()["vod_categories"] = []
+        cache_module.get_cache()["vod_streams"] = [
             {"stream_id": 1, "name": "Zebra", "source_id": "src1"},
             {"stream_id": 2, "name": "Apple", "source_id": "src1"},
         ]
@@ -344,12 +334,10 @@ class TestSeries:
             assert resp.status_code == 200
 
     def test_series_shows_list_from_cache(self, auth_client):
-        import main
-
-        main._cache["series_categories"] = [
+        cache_module.get_cache()["series_categories"] = [
             {"category_id": "30", "category_name": "Drama", "source_id": "src1"}
         ]
-        main._cache["series"] = [
+        cache_module.get_cache()["series"] = [
             {"series_id": 200, "name": "Show 1", "category_id": "30", "source_id": "src1"}
         ]
 
@@ -361,49 +349,41 @@ class TestSearch:
     """Tests for search page."""
 
     def test_search_page_renders(self, auth_client):
-        import main
-
-        main._cache["live_streams"] = []
-        main._cache["vod_streams"] = []
-        main._cache["series"] = []
+        cache_module.get_cache()["live_streams"] = []
+        cache_module.get_cache()["vod_streams"] = []
+        cache_module.get_cache()["series"] = []
 
         resp = auth_client.get("/search")
         assert resp.status_code == 200
 
     def test_search_finds_live_streams(self, auth_client):
-        import main
-
-        main._cache["live_streams"] = [
+        cache_module.get_cache()["live_streams"] = [
             {"stream_id": 1, "name": "CNN News"},
             {"stream_id": 2, "name": "BBC World"},
         ]
-        main._cache["live_categories"] = []
-        main._cache["epg_urls"] = []
-        main._cache["vod_streams"] = []
-        main._cache["series"] = []
+        cache_module.get_cache()["live_categories"] = []
+        cache_module.get_cache()["epg_urls"] = []
+        cache_module.get_cache()["vod_streams"] = []
+        cache_module.get_cache()["series"] = []
 
         resp = auth_client.get("/search?q=CNN&live=true")
         assert resp.status_code == 200
 
     def test_search_regex_mode(self, auth_client):
-        import main
-
-        main._cache["live_streams"] = [
+        cache_module.get_cache()["live_streams"] = [
             {"stream_id": 1, "name": "CNN News"},
             {"stream_id": 2, "name": "CNBC Finance"},
         ]
-        main._cache["live_categories"] = []
-        main._cache["epg_urls"] = []
-        main._cache["vod_streams"] = []
-        main._cache["series"] = []
+        cache_module.get_cache()["live_categories"] = []
+        cache_module.get_cache()["epg_urls"] = []
+        cache_module.get_cache()["vod_streams"] = []
+        cache_module.get_cache()["series"] = []
 
         resp = auth_client.get("/search?q=CN.*&regex=true&live=true")
         assert resp.status_code == 200
 
     def test_search_rejects_long_regex(self, auth_client):
-        import main
-
-        main._cache["live_streams"] = []
+        cache_module.get_cache()["live_streams"] = []
 
         resp = auth_client.get(f"/search?q={'a' * 101}&regex=true&live=true")
         assert resp.status_code == 400
@@ -413,9 +393,7 @@ class TestSettings:
     """Tests for settings page."""
 
     def test_settings_page_renders(self, auth_client):
-        import main
-
-        main._cache["live_categories"] = []
+        cache_module.get_cache()["live_categories"] = []
 
         with patch("main.load_file_cache", return_value=None):
             resp = auth_client.get("/settings")
@@ -521,8 +499,6 @@ class TestDeleteSource:
     """Tests for deleting sources."""
 
     def test_delete_source(self, auth_client, tmp_path):
-        import json
-
         settings_file = tmp_path / "server_settings.json"
         settings_file.write_text(
             json.dumps(
@@ -714,9 +690,7 @@ class TestRefreshStatus:
     """Tests for refresh status endpoints."""
 
     def test_guide_refresh_status(self, auth_client):
-        import main
-
-        main._refresh_in_progress.clear()
+        m3u_module.get_refresh_in_progress().clear()
 
         resp = auth_client.get("/guide/refresh-status")
         assert resp.status_code == 200
@@ -725,9 +699,7 @@ class TestRefreshStatus:
         assert data["epg"] is False
 
     def test_settings_refresh_status(self, auth_client):
-        import main
-
-        main._refresh_in_progress.clear()
+        m3u_module.get_refresh_in_progress().clear()
 
         resp = auth_client.get("/settings/refresh-status")
         assert resp.status_code == 200

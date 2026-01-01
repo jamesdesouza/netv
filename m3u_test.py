@@ -17,13 +17,13 @@ def m3u_module(tmp_path: Path):
     cache.USERS_DIR.mkdir(exist_ok=True)
     cache.CACHE_DIR = tmp_path / "cache"
     cache.CACHE_DIR.mkdir(exist_ok=True)
-    cache._cache.clear()
+    cache.get_cache().clear()
 
     import m3u
 
     yield m3u
 
-    cache._cache.clear()
+    cache.get_cache().clear()
 
 
 class TestParseM3u:

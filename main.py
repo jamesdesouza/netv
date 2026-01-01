@@ -93,11 +93,6 @@ import transcoding
 
 log = logging.getLogger()
 
-# Re-exports for backwards compatibility
-_cache = get_cache()
-_cache_lock = get_cache_lock()
-_refresh_in_progress = get_refresh_in_progress()
-
 # SSE subscribers for EPG ready notifications (limit to prevent DoS)
 _epg_subscribers: set[asyncio.Queue[str]] = set()
 _shutdown_event: asyncio.Event | None = None  # Set during shutdown to close SSE
@@ -152,26 +147,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     pass
     except Exception:
         pass
-    # Clean up expired/orphaned dirs and recover valid VOD sessions
-    transcoding.recover_vod_sessions()
+    # Clean up orphaned dirs and recover valid VOD sessions
+    transcoding.cleanup_and_recover_sessions()
 
     # Preload all data in background threads (parallel)
     def load_live():
-        _refresh_in_progress.add("guide_load")
+        get_refresh_in_progress().add("guide_load")
         try:
             log.info("Preloading live data")
             cats, streams, epg_urls = load_all_live_data()
-            with _cache_lock:
-                _cache["live_categories"] = cats
-                _cache["live_streams"] = streams
-                _cache["epg_urls"] = epg_urls
+            with get_cache_lock():
+                get_cache()["live_categories"] = cats
+                get_cache()["live_streams"] = streams
+                get_cache()["epg_urls"] = epg_urls
             log.info("Live data loaded")
         finally:
-            _refresh_in_progress.discard("guide_load")
+            get_refresh_in_progress().discard("guide_load")
 
     def load_epg_data():
         try:
-            epg_urls = _cache.get("epg_urls", [])
+            epg_urls = get_cache().get("epg_urls", [])
             if epg_urls:
                 load_all_epg(epg_urls)
                 log.info("EPG data loaded: %d programs", epg_db.get_program_count())
@@ -184,16 +179,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     def load_vod():
         vod_cats, vod_streams = load_vod_data()
-        with _cache_lock:
-            _cache["vod_categories"] = vod_cats
-            _cache["vod_streams"] = vod_streams
+        with get_cache_lock():
+            get_cache()["vod_categories"] = vod_cats
+            get_cache()["vod_streams"] = vod_streams
         log.info("VOD data loaded")
 
     def load_series():
         series_cats, series_list = load_series_data()
-        with _cache_lock:
-            _cache["series_categories"] = series_cats
-            _cache["series"] = series_list
+        with get_cache_lock():
+            get_cache()["series_categories"] = series_cats
+            get_cache()["series"] = series_list
         log.info("Series data loaded")
 
     # Start all preloads in parallel (EPG waits for live data internally)
@@ -207,12 +202,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     threading.Thread(target=load_series, daemon=True).start()
     log.info("Preload started: live+EPG, VOD, series loading in parallel")
 
-    # Periodic cleanup of expired VOD sessions
+    # Periodic cleanup of expired sessions (VOD and live)
     cleanup_stop = threading.Event()
 
     def cleanup_loop():
         while not cleanup_stop.wait(60):  # Check every minute
-            transcoding.cleanup_expired_vod_sessions()
+            transcoding.cleanup_expired_sessions()
 
     cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
     cleanup_thread.start()
@@ -231,11 +226,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     # Only trigger once per scheduled time
                     if (
                         _last_triggered.get(source.id) != current_time
-                        and key not in _refresh_in_progress
+                        and key not in get_refresh_in_progress()
                     ):
                         log.info("Scheduled EPG refresh for %s at %s", source.name, current_time)
                         _last_triggered[source.id] = current_time
-                        _refresh_in_progress.add(key)
+                        get_refresh_in_progress().add(key)
 
                         def do_refresh(src: Source = source, k: str = key):
                             try:
@@ -253,7 +248,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                             except Exception as e:
                                 log.error("Scheduled EPG refresh failed for %s: %s", src.name, e)
                             finally:
-                                _refresh_in_progress.discard(k)
+                                get_refresh_in_progress().discard(k)
 
                         threading.Thread(target=do_refresh, daemon=True).start()
 
@@ -480,31 +475,31 @@ def load_all_epg(epg_urls: list[tuple[str, int, str]]) -> None:
             _fetch_all_epg(epg_urls)
         except Exception as e:
             log.error("EPG fetch failed: %s", e)
-            _cache["epg_error"] = str(e)
+            get_cache()["epg_error"] = str(e)
 
 
 def _start_guide_background_load() -> None:
     """Start background loading of guide data if not already in progress."""
-    if "guide_load" in _refresh_in_progress:
+    if "guide_load" in get_refresh_in_progress():
         return
-    _refresh_in_progress.add("guide_load")
+    get_refresh_in_progress().add("guide_load")
 
     def load():
         try:
             log.info("Loading guide data in background")
             cats, streams, epg_urls = load_all_live_data()
-            with _cache_lock:
-                _cache["live_categories"] = cats
-                _cache["live_streams"] = streams
-                _cache["epg_urls"] = epg_urls
+            with get_cache_lock():
+                get_cache()["live_categories"] = cats
+                get_cache()["live_streams"] = streams
+                get_cache()["epg_urls"] = epg_urls
             try:
                 _fetch_all_epg(epg_urls)
             except Exception as e:
-                with _cache_lock:
-                    _cache["epg_error"] = str(e)
+                with get_cache_lock():
+                    get_cache()["epg_error"] = str(e)
             log.info("Guide data loaded")
         finally:
-            _refresh_in_progress.discard("guide_load")
+            get_refresh_in_progress().discard("guide_load")
 
     threading.Thread(target=load, daemon=True).start()
 
@@ -559,14 +554,14 @@ async def guide_page(
             )
 
     # If no channel data in memory, try file cache first (async to avoid blocking)
-    if "live_categories" not in _cache or "live_streams" not in _cache:
+    if "live_categories" not in get_cache() or "live_streams" not in get_cache():
         cached = await asyncio.to_thread(load_file_cache, "live_data")
         if cached:
             data, _ = cached
-            with _cache_lock:
-                _cache["live_categories"] = data["cats"]
-                _cache["live_streams"] = data["streams"]
-                _cache["epg_urls"] = parse_epg_urls(data.get("epg_urls", []))
+            with get_cache_lock():
+                get_cache()["live_categories"] = data["cats"]
+                get_cache()["live_streams"] = data["streams"]
+                get_cache()["epg_urls"] = parse_epg_urls(data.get("epg_urls", []))
         else:
             # No cache at all - start background load and show loading page
             _start_guide_background_load()
@@ -586,8 +581,8 @@ async def guide_page(
                 },
             )
 
-    categories = _cache["live_categories"]
-    all_streams = _cache["live_streams"]
+    categories = get_cache()["live_categories"]
+    all_streams = get_cache()["live_streams"]
     # EPG is optional - check sqlite db for data
     epg_loading = not epg_db.has_programs()
 
@@ -647,7 +642,11 @@ async def guide_page(
     # Log streams with EPG IDs that returned no programs (potential misconfiguration)
     for s, epg_id in zip(streams, epg_ids, strict=False):
         if epg_id and not programs_map.get(epg_id):
-            log.warning("Stream '%s' has epg_channel_id='%s' but no EPG programs found", s["name"], epg_id)
+            log.warning(
+                "Stream '%s' has epg_channel_id='%s' but no EPG programs found",
+                s["name"],
+                epg_id,
+            )
 
     # Build channel list and grid data
     window_end_mobile = window_start + timedelta(hours=2)
@@ -732,7 +731,7 @@ async def guide_page(
             "time_markers_mobile": time_markers_mobile,
             "offset": offset,
             "window_start": window_start.strftime("%Y-%m-%d %H:%M"),
-            "epg_error": _cache.get("epg_error"),
+            "epg_error": get_cache().get("epg_error"),
             "epg_loading": epg_loading,
             "channel_count": len(grid_data),
             "loading": False,
@@ -743,20 +742,20 @@ async def guide_page(
 
 def _start_vod_background_load() -> None:
     """Start background loading of VOD data if not already in progress."""
-    if "vod_load" in _refresh_in_progress:
+    if "vod_load" in get_refresh_in_progress():
         return
-    _refresh_in_progress.add("vod_load")
+    get_refresh_in_progress().add("vod_load")
 
     def load():
         try:
             log.info("Loading VOD data in background")
             vod_cats, vod_streams = load_vod_data()
-            with _cache_lock:
-                _cache["vod_categories"] = vod_cats
-                _cache["vod_streams"] = vod_streams
+            with get_cache_lock():
+                get_cache()["vod_categories"] = vod_cats
+                get_cache()["vod_streams"] = vod_streams
             log.info("VOD data loaded")
         finally:
-            _refresh_in_progress.discard("vod_load")
+            get_refresh_in_progress().discard("vod_load")
 
     threading.Thread(target=load, daemon=True).start()
 
@@ -769,12 +768,12 @@ async def vod_page(
     sort: str | None = None,
 ):
     # Load from file cache if not in memory (async to avoid blocking)
-    if "vod_categories" not in _cache or "vod_streams" not in _cache:
+    if "vod_categories" not in get_cache() or "vod_streams" not in get_cache():
         cached = await asyncio.to_thread(load_file_cache, "vod_data")
         if cached:
             data, _ = cached
-            _cache["vod_categories"] = data["cats"]
-            _cache["vod_streams"] = data["streams"]
+            get_cache()["vod_categories"] = data["cats"]
+            get_cache()["vod_streams"] = data["streams"]
         else:
             # No cache - start background load and show loading page
             _start_vod_background_load()
@@ -810,10 +809,10 @@ async def vod_page(
         source_id = s.get("source_id", "")
         return f"movies:{source_id}" not in unavailable_groups
 
-    streams = [s for s in _cache["vod_streams"] if movie_allowed(s)]
+    streams = [s for s in get_cache()["vod_streams"] if movie_allowed(s)]
     categories = [
         c
-        for c in _cache["vod_categories"]
+        for c in get_cache()["vod_categories"]
         if f"movies:{c.get('source_id', '')}" not in unavailable_groups
     ]
 
@@ -845,20 +844,20 @@ async def vod_page(
 
 def _start_series_background_load() -> None:
     """Start background loading of series data if not already in progress."""
-    if "series_load" in _refresh_in_progress:
+    if "series_load" in get_refresh_in_progress():
         return
-    _refresh_in_progress.add("series_load")
+    get_refresh_in_progress().add("series_load")
 
     def load():
         try:
             log.info("Loading series data in background")
             series_cats, series_list = load_series_data()
-            with _cache_lock:
-                _cache["series_categories"] = series_cats
-                _cache["series"] = series_list
+            with get_cache_lock():
+                get_cache()["series_categories"] = series_cats
+                get_cache()["series"] = series_list
             log.info("Series data loaded")
         finally:
-            _refresh_in_progress.discard("series_load")
+            get_refresh_in_progress().discard("series_load")
 
     threading.Thread(target=load, daemon=True).start()
 
@@ -871,12 +870,12 @@ async def series_page(
     sort: str | None = None,
 ):
     # Load from file cache if not in memory (async to avoid blocking)
-    if "series_categories" not in _cache or "series" not in _cache:
+    if "series_categories" not in get_cache() or "series" not in get_cache():
         cached = await asyncio.to_thread(load_file_cache, "series_data")
         if cached:
             data, _ = cached
-            _cache["series_categories"] = data["cats"]
-            _cache["series"] = data["series"]
+            get_cache()["series_categories"] = data["cats"]
+            get_cache()["series"] = data["series"]
         else:
             # No cache - start background load and show loading page
             _start_series_background_load()
@@ -912,10 +911,10 @@ async def series_page(
         source_id = s.get("source_id", "")
         return f"series:{source_id}" not in unavailable_groups
 
-    series = [s for s in _cache["series"] if series_allowed(s)]
+    series = [s for s in get_cache()["series"] if series_allowed(s)]
     categories = [
         c
-        for c in _cache["series_categories"]
+        for c in get_cache()["series_categories"]
         if f"series:{c.get('source_id', '')}" not in unavailable_groups
     ]
 
@@ -955,9 +954,9 @@ async def series_detail_page(
     username = user.get("sub", "")
 
     # Check access for this specific series
-    if "series" in _cache:
+    if "series" in get_cache():
         cached_series = next(
-            (s for s in _cache["series"] if str(s.get("series_id")) == str(series_id)),
+            (s for s in get_cache()["series"] if str(s.get("series_id")) == str(series_id)),
             None,
         )
         if cached_series:
@@ -1049,12 +1048,12 @@ async def movie_detail_page(
     username = user.get("sub", "")
 
     # Load from file cache if not in memory
-    if "vod_streams" not in _cache:
+    if "vod_streams" not in get_cache():
         vod_cats, vod_streams = load_vod_data()
-        _cache["vod_categories"] = vod_cats
-        _cache["vod_streams"] = vod_streams
+        get_cache()["vod_categories"] = vod_cats
+        get_cache()["vod_streams"] = vod_streams
 
-    vod_streams = _cache.get("vod_streams", [])
+    vod_streams = get_cache().get("vod_streams", [])
     movie = next((m for m in vod_streams if m.get("stream_id") == stream_id), None)
 
     # Check access for this specific movie
@@ -1133,7 +1132,7 @@ def _get_live_player_info(stream_id: str) -> PlayerInfo:
     """Get player info for live stream."""
     _ensure_live_cache()
     stream = next(
-        (s for s in _cache["live_streams"] if str(s.get("stream_id")) == stream_id),
+        (s for s in get_cache()["live_streams"] if str(s.get("stream_id")) == stream_id),
         None,
     )
     if not stream:
@@ -1179,9 +1178,9 @@ def _get_movie_player_info(stream_id: str, ext: str) -> PlayerInfo:
     info = PlayerInfo(url=xtream.build_stream_url("movie", int(stream_id), ext))
 
     # Get source_id from cached movie data for access control
-    if "vod_streams" in _cache:
+    if "vod_streams" in get_cache():
         cached_movie = next(
-            (m for m in _cache["vod_streams"] if str(m.get("stream_id")) == str(stream_id)),
+            (m for m in get_cache()["vod_streams"] if str(m.get("stream_id")) == str(stream_id)),
             None,
         )
         if cached_movie:
@@ -1213,9 +1212,9 @@ def _get_series_player_info(
     info = PlayerInfo(url=xtream.build_stream_url("series", int(stream_id), ext))
 
     # Get source_id from cached series data for access control
-    if series_id and "series" in _cache:
+    if series_id and "series" in get_cache():
         cached_series = next(
-            (s for s in _cache["series"] if str(s.get("series_id")) == str(series_id)),
+            (s for s in get_cache()["series"] if str(s.get("series_id")) == str(series_id)),
             None,
         )
         if cached_series:
@@ -1225,13 +1224,13 @@ def _get_series_player_info(
             log.warning(
                 "Series %s not found in cache (cache has %d entries)",
                 series_id,
-                len(_cache["series"]),
+                len(get_cache()["series"]),
             )
     else:
         log.warning(
             "Series lookup skipped: series_id=%s, 'series' in cache=%s",
             series_id,
-            "series" in _cache,
+            "series" in get_cache(),
         )
 
     if not series_id:
@@ -1281,15 +1280,15 @@ def _get_series_player_info(
 
 def _ensure_live_cache() -> None:
     """Ensure live streams and EPG are loaded."""
-    if "live_streams" not in _cache:
+    if "live_streams" not in get_cache():
         cats, streams, epg_urls = load_all_live_data()
-        with _cache_lock:
-            _cache["live_categories"] = cats
-            _cache["live_streams"] = streams
-            _cache["epg_urls"] = epg_urls
+        with get_cache_lock():
+            get_cache()["live_categories"] = cats
+            get_cache()["live_streams"] = streams
+            get_cache()["epg_urls"] = epg_urls
     if not epg_db.has_programs():
         with contextlib.suppress(Exception):
-            load_all_epg(_cache.get("epg_urls", []))
+            load_all_epg(get_cache().get("epg_urls", []))
 
 
 @app.get("/play/{stream_type}/{stream_id:path}", response_class=HTMLResponse)
@@ -1435,35 +1434,37 @@ async def search_page(
 
         # Load live data (run in thread to avoid blocking)
         if live:
-            if "live_streams" not in _cache:
+            if "live_streams" not in get_cache():
                 cats, streams, epg_urls = await asyncio.to_thread(load_all_live_data)
-                with _cache_lock:
-                    _cache["live_categories"] = cats
-                    _cache["live_streams"] = streams
-                    _cache["epg_urls"] = epg_urls
-            results["live"] = [s for s in _cache["live_streams"] if match_fn(s.get("name") or "")][
-                :20
-            ]
+                with get_cache_lock():
+                    get_cache()["live_categories"] = cats
+                    get_cache()["live_streams"] = streams
+                    get_cache()["epg_urls"] = epg_urls
+            results["live"] = [
+                s for s in get_cache()["live_streams"] if match_fn(s.get("name") or "")
+            ][:20]
 
         # Load VOD data (run in thread to avoid blocking)
         if vod:
-            if "vod_streams" not in _cache:
+            if "vod_streams" not in get_cache():
                 vod_cats, vod_streams = await asyncio.to_thread(load_vod_data)
-                with _cache_lock:
-                    _cache["vod_categories"] = vod_cats
-                    _cache["vod_streams"] = vod_streams
-            results["vod"] = [s for s in _cache["vod_streams"] if match_fn(s.get("name") or "")][
-                :20
-            ]
+                with get_cache_lock():
+                    get_cache()["vod_categories"] = vod_cats
+                    get_cache()["vod_streams"] = vod_streams
+            results["vod"] = [
+                s for s in get_cache()["vod_streams"] if match_fn(s.get("name") or "")
+            ][:20]
 
         # Load series data (run in thread to avoid blocking)
         if series:
-            if "series" not in _cache:
+            if "series" not in get_cache():
                 series_cats, series_list = await asyncio.to_thread(load_series_data)
-                with _cache_lock:
-                    _cache["series_categories"] = series_cats
-                    _cache["series"] = series_list
-            results["series"] = [s for s in _cache["series"] if match_fn(s.get("name") or "")][:20]
+                with get_cache_lock():
+                    get_cache()["series_categories"] = series_cats
+                    get_cache()["series"] = series_list
+            results["series"] = [s for s in get_cache()["series"] if match_fn(s.get("name") or "")][
+                :20
+            ]
 
     username = user.get("sub", "")
     user_settings = load_user_settings(username)
@@ -1718,7 +1719,7 @@ def _build_all_groups() -> list[dict[str, str]]:
     sources_by_id = {s.id: s for s in get_sources()}
 
     # Live TV categories
-    for cat in _cache.get("live_categories", []):
+    for cat in get_cache().get("live_categories", []):
         source_id = cat.get("source_id", "")
         source = sources_by_id.get(source_id)
         if source:
@@ -1807,14 +1808,14 @@ async def settings_page(request: Request, user: Annotated[dict, Depends(require_
     server_settings = load_server_settings()
     user_settings = load_user_settings(username)
     # Load categories (from file cache or trigger background load)
-    if "live_categories" not in _cache:
+    if "live_categories" not in get_cache():
         cached = await asyncio.to_thread(load_file_cache, "live_data")
         if cached:
             data, _ = cached
-            with _cache_lock:
-                _cache["live_categories"] = data["cats"]
-                _cache["live_streams"] = data["streams"]
-                _cache["epg_urls"] = parse_epg_urls(data.get("epg_urls", []))
+            with get_cache_lock():
+                get_cache()["live_categories"] = data["cats"]
+                get_cache()["live_streams"] = data["streams"]
+                get_cache()["epg_urls"] = parse_epg_urls(data.get("epg_urls", []))
         else:
             # No cache - start background load
             _start_guide_background_load()
@@ -1822,7 +1823,7 @@ async def settings_page(request: Request, user: Annotated[dict, Depends(require_
     # Filter live categories based on user's unavailable groups
     user_limits = auth.get_user_limits(username)
     unavailable_groups = set(user_limits.get("unavailable_groups", []))
-    all_live_cats = _cache.get("live_categories", [])
+    all_live_cats = get_cache().get("live_categories", [])
     live_categories = [
         cat for cat in all_live_cats if f"cat:{cat['category_id']}" not in unavailable_groups
     ]
@@ -1838,6 +1839,9 @@ async def settings_page(request: Request, user: Annotated[dict, Depends(require_
             "max_resolution": server_settings.get("max_resolution", "1080p"),
             "quality": server_settings.get("quality", "high"),
             "vod_transcode_cache_mins": server_settings.get("vod_transcode_cache_mins", 60),
+            "live_transcode_cache_secs": server_settings.get("live_transcode_cache_secs", 60),
+            "live_dvr_mins": server_settings.get("live_dvr_mins", 0),
+            "transcode_dir": server_settings.get("transcode_dir", ""),
             "probe_live": server_settings.get("probe_live", True),
             "probe_movies": server_settings.get("probe_movies", True),
             "probe_series": server_settings.get("probe_series", False),
@@ -2008,42 +2012,42 @@ async def guide_refresh(_user: Annotated[dict, Depends(require_auth)]):
         try:
             log.info("Live refresh: fetching channels")
             cats, streams, epg_urls = load_all_live_data()
-            with _cache_lock:
-                _cache["live_categories"] = cats
-                _cache["live_streams"] = streams
-                _cache["epg_urls"] = epg_urls
+            with get_cache_lock():
+                get_cache()["live_categories"] = cats
+                get_cache()["live_streams"] = streams
+                get_cache()["epg_urls"] = epg_urls
             save_file_cache("live_data", {"cats": cats, "streams": streams, "epg_urls": epg_urls})
             log.info("Live refresh: complete (%d categories, %d streams)", len(cats), len(streams))
         except Exception as e:
             log.error("Live refresh failed: %s", e)
         finally:
-            _refresh_in_progress.discard("live_refresh")
+            get_refresh_in_progress().discard("live_refresh")
 
     def refresh_epg():
         try:
-            epg_urls = _cache.get("epg_urls", [])
+            epg_urls = get_cache().get("epg_urls", [])
             if epg_urls:
                 log.info("EPG refresh: fetching %d sources", len(epg_urls))
                 epg_db.clear()
                 count = _fetch_all_epg(epg_urls)
-                with _cache_lock:
-                    _cache.pop("epg_error", None)
+                with get_cache_lock():
+                    get_cache().pop("epg_error", None)
                 log.info("EPG refresh: complete (%d programs)", count)
             else:
                 log.warning("EPG refresh: no EPG URLs available")
         except Exception as e:
             log.error("EPG refresh failed: %s", e)
-            with _cache_lock:
-                _cache["epg_error"] = str(e)
+            with get_cache_lock():
+                get_cache()["epg_error"] = str(e)
         finally:
-            _refresh_in_progress.discard("epg_refresh")
+            get_refresh_in_progress().discard("epg_refresh")
 
     # Set flags before starting threads to avoid race with status polling
-    if "live_refresh" not in _refresh_in_progress:
-        _refresh_in_progress.add("live_refresh")
+    if "live_refresh" not in get_refresh_in_progress():
+        get_refresh_in_progress().add("live_refresh")
         threading.Thread(target=refresh_live, daemon=True).start()
-    if "epg_refresh" not in _refresh_in_progress:
-        _refresh_in_progress.add("epg_refresh")
+    if "epg_refresh" not in get_refresh_in_progress():
+        get_refresh_in_progress().add("epg_refresh")
         threading.Thread(target=refresh_epg, daemon=True).start()
     return RedirectResponse("/guide?refreshing=1", status_code=303)
 
@@ -2052,8 +2056,8 @@ async def guide_refresh(_user: Annotated[dict, Depends(require_auth)]):
 async def guide_refresh_status(_user: Annotated[dict, Depends(require_auth)]):
     """Return refresh status for polling."""
     return {
-        "live": "live_refresh" in _refresh_in_progress,
-        "epg": "epg_refresh" in _refresh_in_progress,
+        "live": "live_refresh" in get_refresh_in_progress(),
+        "epg": "epg_refresh" in get_refresh_in_progress(),
     }
 
 
@@ -2070,10 +2074,10 @@ async def settings_refresh_source(
         return {"error": "Source not found"}
 
     key = f"{source_id}_{refresh_type}"
-    if key in _refresh_in_progress:
+    if key in get_refresh_in_progress():
         return {"status": "already_running"}
 
-    _refresh_in_progress.add(key)
+    get_refresh_in_progress().add(key)
 
     def do_refresh():
         try:
@@ -2081,25 +2085,28 @@ async def settings_refresh_source(
                 log.info("Refreshing live data for source: %s", source.name)
                 cats, streams, epg_url, timeout = fetch_source_live_data(source)
                 # Update cache by replacing this source's data
-                with _cache_lock:
+                with get_cache_lock():
                     existing_cats = [
                         c
-                        for c in _cache.get("live_categories", [])
+                        for c in get_cache().get("live_categories", [])
                         if c.get("source_id") != source_id
                     ]
                     existing_streams = [
-                        s for s in _cache.get("live_streams", []) if s.get("source_id") != source_id
+                        s
+                        for s in get_cache().get("live_streams", [])
+                        if s.get("source_id") != source_id
                     ]
-                    existing_epg = [e for e in _cache.get("epg_urls", []) if e[2] != source_id]
+                    existing_epg = [e for e in get_cache().get("epg_urls", []) if e[2] != source_id]
                     new_cats = existing_cats + cats
                     new_streams = existing_streams + streams
                     new_epg = existing_epg + ([(epg_url, timeout, source_id)] if epg_url else [])
-                    _cache["live_categories"] = new_cats
-                    _cache["live_streams"] = new_streams
-                    _cache["epg_urls"] = new_epg
+                    get_cache()["live_categories"] = new_cats
+                    get_cache()["live_streams"] = new_streams
+                    get_cache()["epg_urls"] = new_epg
                 # Save to file cache
                 save_file_cache(
-                    "live_data", {"cats": new_cats, "streams": new_streams, "epg_urls": new_epg}
+                    "live_data",
+                    {"cats": new_cats, "streams": new_streams, "epg_urls": new_epg},
                 )
                 log.info(
                     "Live refresh complete for %s: %d cats, %d streams",
@@ -2124,9 +2131,9 @@ async def settings_refresh_source(
                 log.info("Refreshing VOD for source: %s", source.name)
                 cats, streams = fetch_source_vod_data(source)
                 # For now, VOD is single-source, so just replace entirely
-                with _cache_lock:
-                    _cache.pop("vod_categories", None)
-                    _cache.pop("vod_streams", None)
+                with get_cache_lock():
+                    get_cache().pop("vod_categories", None)
+                    get_cache().pop("vod_streams", None)
                 for f in CACHE_DIR.glob("vod_data*.json"):
                     f.unlink(missing_ok=True)
                 save_file_cache("vod_data", {"cats": cats, "streams": streams})
@@ -2141,20 +2148,22 @@ async def settings_refresh_source(
                 log.info("Refreshing M3U playlist for source: %s", source.name)
                 cats, streams, detected_epg_url = fetch_m3u(source.url, source.id)
                 update_source_epg_url(source_id, detected_epg_url)
-                with _cache_lock:
+                with get_cache_lock():
                     existing_cats = [
                         c
-                        for c in _cache.get("live_categories", [])
+                        for c in get_cache().get("live_categories", [])
                         if c.get("source_id") != source_id
                     ]
                     existing_streams = [
-                        s for s in _cache.get("live_streams", []) if s.get("source_id") != source_id
+                        s
+                        for s in get_cache().get("live_streams", [])
+                        if s.get("source_id") != source_id
                     ]
                     new_cats = existing_cats + cats
                     new_streams = existing_streams + streams
-                    _cache["live_categories"] = new_cats
-                    _cache["live_streams"] = new_streams
-                    epg_urls = _cache.get("epg_urls", [])
+                    get_cache()["live_categories"] = new_cats
+                    get_cache()["live_streams"] = new_streams
+                    epg_urls = get_cache().get("epg_urls", [])
                 save_file_cache(
                     "live_data",
                     {
@@ -2173,7 +2182,7 @@ async def settings_refresh_source(
         except Exception as e:
             log.error("Source refresh failed (%s/%s): %s", source.name, refresh_type, e)
         finally:
-            _refresh_in_progress.discard(key)
+            get_refresh_in_progress().discard(key)
 
     threading.Thread(target=do_refresh, daemon=True).start()
     return {"status": "started", "key": key}
@@ -2183,7 +2192,7 @@ async def settings_refresh_source(
 async def settings_refresh_status(_user: Annotated[dict, Depends(require_auth)]):
     """Return per-source refresh status."""
     statuses: dict[str, Any] = {}
-    for key in list(_refresh_in_progress):
+    for key in list(get_refresh_in_progress()):
         if "_" in key:
             # Format: source_id_type (e.g., "ota_epg" or "src_123_epg")
             parts = key.rsplit("_", 1)
@@ -2191,7 +2200,7 @@ async def settings_refresh_status(_user: Annotated[dict, Depends(require_auth)])
                 source_id, rtype = parts
                 statuses.setdefault(source_id, {})[rtype] = True
     # Report global guide_load as affecting all sources
-    if "guide_load" in _refresh_in_progress:
+    if "guide_load" in get_refresh_in_progress():
         statuses["_global"] = {"live": True, "epg": True}
     return statuses
 

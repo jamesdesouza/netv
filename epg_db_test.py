@@ -5,12 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import sys
-
 import pytest
 
-
-sys.path.insert(0, str(Path(__file__).parent))
 from epg_db import Program
 
 import epg_db

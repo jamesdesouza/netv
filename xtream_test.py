@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import json
-import sys
 
 import pytest
 
-
-sys.path.insert(0, str(Path(__file__).parent))
 from xtream import XtreamClient
 
 
