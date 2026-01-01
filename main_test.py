@@ -40,7 +40,7 @@ def client(tmp_path: Path, mock_deps):
         patch("auth.CACHE_DIR", tmp_path),
         patch("auth.SERVER_SETTINGS_FILE", tmp_path / "server_settings.json"),
         patch("auth.USERS_DIR", tmp_path / "users"),
-        patch("epg_db.init"),
+        patch("epg.init"),
         patch("ffmpeg_command.init"),
         patch("ffmpeg_session.cleanup_and_recover_sessions"),
     ):
@@ -64,7 +64,7 @@ def auth_client(tmp_path: Path, mock_deps):
         patch("auth.CACHE_DIR", tmp_path),
         patch("auth.SERVER_SETTINGS_FILE", tmp_path / "server_settings.json"),
         patch("auth.USERS_DIR", tmp_path / "users"),
-        patch("epg_db.init"),
+        patch("epg.init"),
         patch("ffmpeg_command.init"),
         patch("ffmpeg_session.cleanup_and_recover_sessions"),
     ):
@@ -265,7 +265,7 @@ class TestGuide:
             {"stream_id": 1, "name": "CNN", "category_ids": ["1"], "epg_channel_id": ""}
         ]
 
-        with patch("main.epg_db.has_programs", return_value=True):
+        with patch("main.epg.has_programs", return_value=True):
             resp = auth_client.get("/guide?cats=1")
             assert resp.status_code == 200
 

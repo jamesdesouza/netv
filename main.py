@@ -87,7 +87,7 @@ from m3u import (
 from xtream import XtreamClient
 
 import auth
-import epg_db
+import epg
 import ffmpeg_command
 import ffmpeg_session
 
@@ -126,11 +126,11 @@ _fetch_locks: dict[str, threading.Lock] = {
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Clean up orphaned transcodes and preload data on startup."""
     # Initialize EPG database
-    epg_db.init(CACHE_DIR)
+    epg.init(CACHE_DIR)
 
     # Prune expired EPG data (keep 24h buffer for "what was just on")
     cutoff = datetime.now(UTC) - timedelta(hours=24)
-    pruned = epg_db.prune_old_programs(cutoff)
+    pruned = epg.prune_old_programs(cutoff)
     if pruned:
         log.info("Pruned %d expired EPG programs", pruned)
 
@@ -176,7 +176,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             epg_urls = get_cache().get("epg_urls", [])
             if epg_urls:
                 load_all_epg(epg_urls)
-                log.info("EPG data loaded: %d programs", epg_db.get_program_count())
+                log.info("EPG data loaded: %d programs", epg.get_program_count())
                 # Notify SSE subscribers
                 for q in list(_epg_subscribers):
                     with contextlib.suppress(Exception):
@@ -462,7 +462,7 @@ def _fetch_all_epg(epg_urls: list[tuple[str, int, str]]) -> int:
 
     # Prune expired programs (keep 24h buffer)
     cutoff = datetime.now(UTC) - timedelta(hours=24)
-    pruned = epg_db.prune_old_programs(cutoff)
+    pruned = epg.prune_old_programs(cutoff)
     if pruned:
         log.info("Pruned %d expired EPG programs", pruned)
 
@@ -476,13 +476,13 @@ def load_all_epg(epg_urls: list[tuple[str, int, str]]) -> None:
     Args:
         epg_urls: List of (url, timeout, source_id) tuples
     """
-    if epg_db.has_programs():
-        log.info("EPG database has %d programs", epg_db.get_program_count())
+    if epg.has_programs():
+        log.info("EPG database has %d programs", epg.get_program_count())
         return
 
     # No data - fetch synchronously
     with _fetch_locks["epg"]:
-        if epg_db.has_programs():
+        if epg.has_programs():
             return
         log.info("No EPG data, fetching")
         try:
@@ -529,7 +529,7 @@ async def epg_events(_user: Annotated[dict, Depends(require_auth)]):
     async def event_stream():
         try:
             # If EPG already loaded, send immediately
-            if epg_db.has_programs():
+            if epg.has_programs():
                 yield "data: epg_ready\n\n"
                 return
             # Wait for EPG ready event or shutdown
@@ -598,7 +598,7 @@ async def guide_page(
     categories = get_cache()["live_categories"]
     all_streams = get_cache()["live_streams"]
     # EPG is optional - check sqlite db for data
-    epg_loading = not epg_db.has_programs()
+    epg_loading = not epg.has_programs()
 
     # Parse selected category IDs (ordered list)
     ordered_cats: list[str] = []
@@ -642,7 +642,7 @@ async def guide_page(
     epg_ids_set = [e for e in epg_ids if e]
 
     # Batch fetch icons and programs
-    icons_map = epg_db.get_icons_batch(epg_ids_set) if epg_ids_set else {}
+    icons_map = epg.get_icons_batch(epg_ids_set) if epg_ids_set else {}
 
     # Time window: 3 hours starting from offset
     now = datetime.now(UTC)
@@ -650,7 +650,7 @@ async def guide_page(
     window_end = window_start + timedelta(hours=3)
 
     programs_map = (
-        epg_db.get_programs_batch(epg_ids_set, window_start, window_end) if epg_ids_set else {}
+        epg.get_programs_batch(epg_ids_set, window_start, window_end) if epg_ids_set else {}
     )
 
     # Log streams with EPG IDs that returned no programs (potential misconfiguration)
@@ -1176,7 +1176,7 @@ def _get_live_player_info(stream_id: str) -> PlayerInfo:
     epg_id = stream.get("epg_channel_id") or ""
     if epg_id:
         now = datetime.now(UTC)
-        programs = epg_db.get_programs_in_range(epg_id, now, now + timedelta(minutes=1))
+        programs = epg.get_programs_in_range(epg_id, now, now + timedelta(minutes=1))
         if programs:
             info.program_title, info.program_desc = programs[0].title, programs[0].desc
     return info
@@ -1300,7 +1300,7 @@ def _ensure_live_cache() -> None:
             get_cache()["live_categories"] = cats
             get_cache()["live_streams"] = streams
             get_cache()["epg_urls"] = epg_urls
-    if not epg_db.has_programs():
+    if not epg.has_programs():
         with contextlib.suppress(Exception):
             load_all_epg(get_cache().get("epg_urls", []))
 
@@ -2017,7 +2017,7 @@ async def settings_delete_source(
     settings["sources"] = [s for s in settings.get("sources", []) if s["id"] != source_id]
     save_server_settings(settings)
     # Clear all caches including EPG data for this source
-    epg_db.clear_source(source_id)
+    epg.clear_source(source_id)
     clear_all_file_caches()
     return RedirectResponse("/settings", status_code=303)
 
@@ -2046,7 +2046,7 @@ async def guide_refresh(_user: Annotated[dict, Depends(require_auth)]):
             epg_urls = get_cache().get("epg_urls", [])
             if epg_urls:
                 log.info("EPG refresh: fetching %d sources", len(epg_urls))
-                epg_db.clear()
+                epg.clear()
                 count = _fetch_all_epg(epg_urls)
                 with get_cache_lock():
                     get_cache().pop("epg_error", None)
@@ -2139,7 +2139,7 @@ async def settings_refresh_source(
                 )
                 epg_url = source.epg_url or (source.url if source.type == "epg" else "")
                 if epg_url:
-                    epg_db.clear_source(source_id)
+                    epg.clear_source(source_id)
                     count = _fetch_all_epg([(epg_url, source.epg_timeout, source_id)])
                     log.info("EPG refresh complete for %s: %d programs", source.name, count)
                 else:
