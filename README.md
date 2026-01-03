@@ -37,14 +37,14 @@ If you want a full-featured media center, you'll probably be happier with:
 These are excellent, mature projects with large communities. neTV exists for
 users who find them overkill and just want a simple IPTV player.
 
-How we compare:
+### Comparison
 
 | | neTV | [nodecast-tv] | [Jellyfin] | [Emby] | [Plex] |
 |---|---|---|---|---|---|
 | **Focus** | IPTV | IPTV | General media | General media | General media |
 | **Xtream Codes** | ✅ Native | ✅ Native | ❌ | ❌ | ❌ |
 | **M3U playlists** | ✅ | ✅ | ✅ | ✅ | ⚠️ Via [xTeVe] |
-| **XMLTV EPG** | ✅ URL or file | ⚠️ Via provider | ✅ | ✅ | ✅ |
+| **XMLTV EPG** | ✅ | ⚠️ Via provider | ✅ | ✅ | ✅ |
 | **Local media** | ❌ | ❌ | ✅ | ✅ | ✅ |
 | **Live TV** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **VOD (movies/series)** | ✅ | ✅ | ✅ | ✅ | ✅ |
