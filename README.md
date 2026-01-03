@@ -42,37 +42,39 @@ How we compare:
 | | neTV | [nodecast-tv] | [Jellyfin] | [Emby] | [Plex] |
 |---|---|---|---|---|---|
 | **Focus** | IPTV | IPTV | General media | General media | General media |
-| **Xtream Codes** | Native | Native | No | No | No |
-| **M3U playlists** | Yes | Yes | Yes | Yes | Via [xTeVe] |
-| **XMLTV EPG** | URL or file | Via provider | Yes | Yes | Yes |
-| **Local media** | No | No | Yes | Yes | Yes |
-| **Live TV** | Yes | Yes | Yes | Yes | Yes |
-| **VOD (movies/series)** | Yes | Yes | Yes | Yes | Yes |
-| **DVR recording** | No | No | Yes | Yes | Yes (Pass) |
-| **Catchup/timeshift** | No | No | Plugin | Plugin | No |
-| **Live rewind buffer** | Yes | No | Via DVR | Via DVR | Via DVR |
-| **Resume playback** | Yes | No | Yes | Yes | Yes |
-| **Multi-user** | Yes | Yes | Yes | Yes | Yes |
-| **User roles** | Admin/viewer | Admin/viewer | Granular | Granular | Granular |
-| **Stream limits** | Per-user, per-source | No | Per-user | Per-user | Per-user |
-| **Library permissions** | N/A | N/A | Per-library | Per-library | Per-library |
-| **Favorites** | Drag-and-drop | Yes | Yes | Yes | Yes |
-| **Search** | Regex | Basic | Basic | Basic | Basic |
-| **Transcoding** | Server HLS | Browser | Server HLS | Server HLS | Server HLS |
-| **NVENC** | Yes | No | Yes | Yes | Yes (Pass) |
-| **VAAPI** | Yes | No | Yes | Yes | Yes (Pass) |
-| **QSV** | Yes | No | Yes | Yes | Yes (Pass) |
-| **Stream passthrough** | Auto h264+aac | N/A | Yes | Yes | Yes |
-| **Software fallback** | Yes | N/A | Yes | Yes | Yes |
-| **Legacy GPU** | Any | N/A | Any | Any | Driver 450+ |
-| **Probe caching** | Series-level | Per-request | Database | Database | Database |
-| **Session recovery** | Yes | No | N/A | N/A | N/A |
-| **Auto deinterlace** | Yes | No | Manual | Manual | Manual |
-| **Subtitles** | WebVTT | No | Full | Full | Full |
-| **Chromecast** | Yes | No | Yes | Yes | Yes |
-| **Mobile apps** | Web only | Web only | Native | Native | Native |
-| **Subscription** | Free | Free | Free | Premiere | Pass |
-| **Setup complexity** | Minimal | Minimal | Moderate | Moderate | Moderate |
+| **Xtream Codes** | ✅ Native | ✅ Native | ❌ No | ❌ No | ❌ No |
+| **M3U playlists** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ⚠️ Via [xTeVe] |
+| **XMLTV EPG** | ✅ URL or file | ⚠️ Via provider | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Local media** | ❌ No | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Live TV** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **VOD (movies/series)** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **DVR recording** | ❌ No | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Pass |
+| **Catchup/timeshift** | ❌ No | ❌ No | ⚠️ Plugin | ⚠️ Plugin | ❌ No |
+| **Live rewind buffer** | ✅ Yes | ❌ No | ⚠️ Via DVR | ⚠️ Via DVR | ⚠️ Via DVR |
+| **Resume playback** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Multi-user** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **User roles** | ⚠️ Admin/viewer | ⚠️ Admin/viewer | ✅ Granular | ✅ Granular | ✅ Granular |
+| **Stream limits** | ✅ Per-user, per-source | ❌ No | ⚠️ Per-user | ⚠️ Per-user | ⚠️ Per-user |
+| **Library permissions** | N/A | N/A | ✅ Per-library | ✅ Per-library | ✅ Per-library |
+| **Favorites** | ✅ Drag-and-drop | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Search** | ✅ Regex | ⚠️ Basic | ⚠️ Basic | ⚠️ Basic | ⚠️ Basic |
+| **Video transcoding** | ✅ Server | ❌ Browser decode | ✅ Server | ✅ Server | ✅ Server |
+| **Audio transcoding** | ✅ Server | ⚠️ Optional | ✅ Server | ✅ Server | ✅ Server |
+| **NVENC** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Pass |
+| **VAAPI** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Pass |
+| **QSV** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Pass |
+| **Stream passthrough** | ✅ Auto h264+aac | ✅ Always | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Software fallback** | ✅ Yes | ❌ No (browser) | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Legacy GPU** | ✅ Any | ❌ No (browser) | ✅ Any | ✅ Any | ⚠️ Driver 450+ |
+| **Probe caching** | ✅ Dynamic | ❌ None | ⚠️ Upfront scan | ⚠️ Upfront scan | ⚠️ Upfront scan |
+| **Episode probe reuse** | ✅ Smart (MRU) | ❌ No | ⚠️ Per-file | ⚠️ Per-file | ⚠️ Per-file |
+| **Session recovery** | ✅ Yes | ❌ No | ⚠️ Via DB | ⚠️ Via DB | ⚠️ Via DB |
+| **Auto deinterlace** | ✅ Yes | ❌ No | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual |
+| **Subtitles** | ⚠️ WebVTT | ❌ No | ✅ Full | ✅ Full | ✅ Full |
+| **Chromecast** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Mobile apps** | ⚠️ Web only | ⚠️ Web only | ✅ Native | ✅ Native | ✅ Native |
+| **Subscription** | ✅ Free | ✅ Free | ✅ Free | ⚠️ Premiere | ⚠️ Pass |
+| **Setup complexity** | ✅ Minimal | ✅ Minimal | ⚠️ Moderate | ⚠️ Moderate | ⚠️ Moderate |
 | **Stack** | Python, FFmpeg | Node.js | .NET, FFmpeg | .NET, FFmpeg | Proprietary |
 
 [nodecast-tv]: https://github.com/technomancer702/nodecast-tv
