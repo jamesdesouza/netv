@@ -59,15 +59,15 @@ users who find them overkill and just want a simple IPTV player.
 | **Favorites** | ✅ Drag-and-drop | ✅ | ✅ | ✅ | ✅ |
 | **Search** | ✅ Regex | ⚠️ Basic | ⚠️ Basic | ⚠️ Basic | ⚠️ Basic |
 | **Video transcoding** | ✅ Server | ❌ No | ✅ Server | ✅ Server | ✅ Server |
-| **Audio transcoding** | ✅ Server | ⚠️ Only | ✅ Server | ✅ Server | ✅ Server |
+| **Audio transcoding** | ✅ Server | ✅ Server | ✅ Server | ✅ Server | ✅ Server |
 | **Transcode only if needed** | ✅ Auto mode | ❌ | ⚠️ Per-library | ⚠️ Per-library | ⚠️ Per-client |
 | **NVENC** | ✅ | ❌ | ✅ | ✅ | ⚠️ Pass |
 | **VAAPI** | ✅ | ❌ | ✅ | ✅ | ⚠️ Pass |
 | **QSV** | ✅ | ❌ | ✅ | ✅ | ⚠️ Pass |
 | **Software fallback** | ✅ | ❌ Browser | ✅ | ✅ | ✅ |
 | **Legacy GPU** | ✅ Any | ❌ No (browser) | ✅ Any | ✅ Any | ⚠️ Driver 450+ |
-| **Probe caching** | ✅ Dynamic | ❌ None | ⚠️ Offline | ⚠️ Offline | ⚠️ Offline |
-| **Episode probe reuse** | ✅ Smart (MRU) | ❌ No | ⚠️ Per-file | ⚠️ Per-file | ⚠️ Per-file |
+| **ffprobe caching** | ✅ Dynamic | ❌ None | ⚠️ Offline | ⚠️ Offline | ⚠️ Offline |
+| **Episode probe reuse** | ✅ MRU | ❌ No | ⚠️ Per-file | ⚠️ Per-file | ⚠️ Per-file |
 | **Session recovery** | ✅ Yes | ❌ No | ⚠️ Via DB | ⚠️ Via DB | ⚠️ Via DB |
 | **Auto deinterlace** | ✅ Yes | ❌ No | ⚠️ Manual | ⚠️ Manual | ⚠️ Manual |
 | **Subtitles** | ⚠️ WebVTT | ❌ No | ✅ Full | ✅ Full | ✅ Full |
