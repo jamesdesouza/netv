@@ -33,17 +33,6 @@ own IPTV subscription that provides Xtream Codes API access or M3U playlists.
 Users are responsible for ensuring they have legal rights to access any content
 through their IPTV providers.
 
-### Consider Alternatives First
-
-If you want a full-featured media center, you'll probably be happier with:
-
-- **[Jellyfin](https://jellyfin.org/)** - Free, open-source media system
-- **[Emby](https://emby.media/)** - Media server with IPTV support
-- **[Plex](https://plex.tv/)** - Popular media platform with live TV
-
-These are excellent, mature projects with large communities. neTV exists for
-users who find them overkill and just want a simple IPTV player.
-
 ## Features
 
 - **Live TV** with EPG grid guide
@@ -76,7 +65,16 @@ Hardware transcoding is auto-detected. Check Settings to see available encoders.
 - **No GPU / VPS**: If `/dev/dri` doesn't exist, comment out the `devices` section
   in `docker-compose.yml` or compose will fail to start
 
-### Comparison
+## Alternatives
+
+If you want a full-featured media center, you might be happier with:
+
+- **[Jellyfin](https://jellyfin.org/)** - Free, open-source media system
+- **[Emby](https://emby.media/)** - Media server with IPTV support
+- **[Plex](https://plex.tv/)** - Popular media platform with live TV
+
+These are excellent, mature projects with large communities. neTV exists for
+users who find them overkill and just want a simple IPTV player.
 
 | | neTV | [nodecast-tv] | [Jellyfin] | [Emby] | [Plex] |
 |---|---|---|---|---|---|
