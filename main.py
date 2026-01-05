@@ -985,7 +985,8 @@ async def series_detail_page(
 ):
     username = user.get("sub", "")
 
-    # Check access for this specific series
+    # Check access for this specific series and get source_id
+    source_id = ""
     if "series" in get_cache():
         cached_series = next(
             (s for s in get_cache()["series"] if str(s.get("series_id")) == str(series_id)),
@@ -998,10 +999,13 @@ async def series_detail_page(
             if f"series:{source_id}" in unavailable_groups:
                 raise HTTPException(403, "Access to this series is restricted")
 
-    xtream = get_first_xtream_client()
+    # Use the series' source, fall back to first Xtream source
+    xtream = get_xtream_client_by_source(source_id) if source_id else None
+    if not xtream:
+        xtream = get_first_xtream_client()
     if not xtream:
         raise HTTPException(404, "No Xtream source configured")
-    cache_key = f"series_info_{series_id}"
+    cache_key = f"series_info_{source_id}_{series_id}" if source_id else f"series_info_{series_id}"
     try:
         series_data = await asyncio.to_thread(
             get_cached_info, cache_key, lambda: xtream.get_series_info(series_id), refresh
