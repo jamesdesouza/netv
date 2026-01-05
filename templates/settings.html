@@ -41,9 +41,82 @@
         <div class="text-xs text-gray-400 mb-1">Unavailable</div>
         <div id="unavailable-cats" class="h-96 overflow-auto space-y-1 bg-gray-700 rounded p-2 border-2 border-dashed border-gray-600">
           {% for cat in live_categories %}
+          {% set src_name = source_names.get(cat.source_id, '') %}
           <div class="cat-chip px-2 py-1 bg-gray-600 rounded text-xs cursor-move truncate hover:bg-gray-500"
-               draggable="true" data-id="{{ cat.category_id }}" title="{{ cat.category_name }}">
-            {{ cat.category_name }}
+               draggable="true" data-id="{{ cat.category_id }}" title="{% if src_name %}[{{ src_name }}] {% endif %}{{ cat.category_name }}">
+            {% if src_name %}<span class="text-gray-400">[{{ src_name }}]</span> {% endif %}{{ cat.category_name }}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Movies Category Filter -->
+  <div id="vod-filters" class="mb-8 p-4 bg-gray-800 rounded">
+    <h3 class="text-xl font-semibold mb-4">Movies Filter</h3>
+    <p class="text-sm text-gray-400 mb-3">Select which movie categories appear on the Movies page</p>
+    <div class="grid grid-cols-2 gap-2 mb-2">
+      <div class="relative">
+        <input type="text" id="vod-cat-search" placeholder="Filter categories..."
+               class="w-full px-3 py-1 pr-7 bg-gray-700 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <button type="button" id="vod-cat-search-clear" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-sm px-1 hidden">✕</button>
+      </div>
+      <div class="flex gap-2">
+        <button type="button" id="vod-cat-move-all-right" class="px-2 py-0.5 text-xs bg-gray-600 hover:bg-gray-500 rounded">Block All</button>
+        <button type="button" id="vod-cat-move-all-left" class="px-2 py-0.5 text-xs bg-gray-600 hover:bg-gray-500 rounded">Allow All</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 gap-2">
+      <div>
+        <div class="text-xs text-gray-400 mb-1">Available</div>
+        <div id="available-vod-cats" class="h-96 overflow-auto space-y-1 bg-gray-700 rounded p-2 border-2 border-dashed border-gray-600">
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400 mb-1">Unavailable</div>
+        <div id="unavailable-vod-cats" class="h-96 overflow-auto space-y-1 bg-gray-700 rounded p-2 border-2 border-dashed border-gray-600">
+          {% for cat in vod_categories %}
+          {% set src_name = source_names.get(cat.source_id, '') %}
+          <div class="vod-cat-chip px-2 py-1 bg-gray-600 rounded text-xs cursor-move truncate hover:bg-gray-500"
+               draggable="true" data-id="{{ cat.category_id }}" title="{% if src_name %}[{{ src_name }}] {% endif %}{{ cat.category_name }}">
+            {% if src_name %}<span class="text-gray-400">[{{ src_name }}]</span> {% endif %}{{ cat.category_name }}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Series Category Filter -->
+  <div id="series-filters" class="mb-8 p-4 bg-gray-800 rounded">
+    <h3 class="text-xl font-semibold mb-4">Series Filter</h3>
+    <p class="text-sm text-gray-400 mb-3">Select which series categories appear on the Series page</p>
+    <div class="grid grid-cols-2 gap-2 mb-2">
+      <div class="relative">
+        <input type="text" id="series-cat-search" placeholder="Filter categories..."
+               class="w-full px-3 py-1 pr-7 bg-gray-700 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <button type="button" id="series-cat-search-clear" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-sm px-1 hidden">✕</button>
+      </div>
+      <div class="flex gap-2">
+        <button type="button" id="series-cat-move-all-right" class="px-2 py-0.5 text-xs bg-gray-600 hover:bg-gray-500 rounded">Block All</button>
+        <button type="button" id="series-cat-move-all-left" class="px-2 py-0.5 text-xs bg-gray-600 hover:bg-gray-500 rounded">Allow All</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 gap-2">
+      <div>
+        <div class="text-xs text-gray-400 mb-1">Available</div>
+        <div id="available-series-cats" class="h-96 overflow-auto space-y-1 bg-gray-700 rounded p-2 border-2 border-dashed border-gray-600">
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400 mb-1">Unavailable</div>
+        <div id="unavailable-series-cats" class="h-96 overflow-auto space-y-1 bg-gray-700 rounded p-2 border-2 border-dashed border-gray-600">
+          {% for cat in series_categories %}
+          {% set src_name = source_names.get(cat.source_id, '') %}
+          <div class="series-cat-chip px-2 py-1 bg-gray-600 rounded text-xs cursor-move truncate hover:bg-gray-500"
+               draggable="true" data-id="{{ cat.category_id }}" title="{% if src_name %}[{{ src_name }}] {% endif %}{{ cat.category_name }}">
+            {% if src_name %}<span class="text-gray-400">[{{ src_name }}]</span> {% endif %}{{ cat.category_name }}
           </div>
           {% endfor %}
         </div>
@@ -792,8 +865,18 @@
 window.SETTINGS_CONFIG = {
   currentUser: {{ current_user | tojson }},
   selectedCats: {{ selected_cats | tojson }},
+  selectedVodCats: {{ selected_vod_cats | tojson }},
+  selectedSeriesCats: {{ selected_series_cats | tojson }},
   catNames: {
     {% for cat in live_categories %}{{ cat.category_id | tojson }}: {{ cat.category_name | tojson }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  },
+  vodCatNames: {
+    {% for cat in vod_categories %}{{ cat.category_id | tojson }}: {{ cat.category_name | tojson }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  },
+  seriesCatNames: {
+    {% for cat in series_categories %}{{ cat.category_id | tojson }}: {{ cat.category_name | tojson }}{% if not loop.last %},{% endif %}
     {% endfor %}
   },
   ccStyle: {{ cc_style | tojson }},

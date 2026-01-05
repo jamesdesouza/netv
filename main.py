@@ -848,6 +848,13 @@ async def vod_page(
         if f"movies:{c.get('source_id', '')}" not in unavailable_groups
     ]
 
+    # Apply user's VOD category filter (if set)
+    vod_filter = user_settings.get("vod_filter", [])
+    if vod_filter:
+        vod_filter_set = set(str(c) for c in vod_filter)
+        categories = [c for c in categories if str(c.get("category_id")) in vod_filter_set]
+        streams = [s for s in streams if str(s.get("category_id")) in vod_filter_set]
+
     # Filter by category if specified
     if category:
         streams = [s for s in streams if str(s.get("category_id")) == str(category)]
@@ -949,6 +956,13 @@ async def series_page(
         for c in get_cache()["series_categories"]
         if f"series:{c.get('source_id', '')}" not in unavailable_groups
     ]
+
+    # Apply user's series category filter (if set)
+    series_filter = user_settings.get("series_filter", [])
+    if series_filter:
+        series_filter_set = set(str(c) for c in series_filter)
+        categories = [c for c in categories if str(c.get("category_id")) in series_filter_set]
+        series = [s for s in series if str(s.get("category_id")) in series_filter_set]
 
     # Filter by category if specified
     if category:
@@ -1538,6 +1552,28 @@ async def search_page(
         s for s in results["series"] if f"series:{s.get('source_id', '')}" not in unavailable_groups
     ]
 
+    # Apply user's category filters from settings
+    guide_filter = user_settings.get("guide_filter", [])
+    if guide_filter:
+        guide_filter_set = set(str(c) for c in guide_filter)
+        results["live"] = [
+            s
+            for s in results["live"]
+            if any(str(cat_id) in guide_filter_set for cat_id in (s.get("category_ids") or []))
+        ]
+
+    vod_filter = user_settings.get("vod_filter", [])
+    if vod_filter:
+        vod_filter_set = set(str(c) for c in vod_filter)
+        results["vod"] = [s for s in results["vod"] if str(s.get("category_id")) in vod_filter_set]
+
+    series_filter = user_settings.get("series_filter", [])
+    if series_filter:
+        series_filter_set = set(str(c) for c in series_filter)
+        results["series"] = [
+            s for s in results["series"] if str(s.get("category_id")) in series_filter_set
+        ]
+
     content_access = _get_content_access(username)
     return TEMPLATES.TemplateResponse(
         request,
@@ -1873,13 +1909,36 @@ async def settings_page(request: Request, user: Annotated[dict, Depends(require_
             # No cache - start background load
             _start_guide_background_load()
 
-    # Filter live categories based on user's unavailable groups
+    # Load VOD categories if not cached
+    if "vod_categories" not in get_cache():
+        cached = await asyncio.to_thread(load_file_cache, "vod_data")
+        if cached:
+            data, _ = cached
+            with get_cache_lock():
+                get_cache()["vod_categories"] = data["cats"]
+                get_cache()["vod_streams"] = data["streams"]
+
+    # Load series categories if not cached
+    if "series_categories" not in get_cache():
+        cached = await asyncio.to_thread(load_file_cache, "series_data")
+        if cached:
+            data, _ = cached
+            with get_cache_lock():
+                get_cache()["series_categories"] = data["cats"]
+                get_cache()["series"] = data["series"]
+
+    # Build source_id -> source_name mapping
+    source_names = {s["id"]: s["name"] for s in server_settings.get("sources", [])}
+
+    # Filter categories based on user's unavailable groups
     user_limits = auth.get_user_limits(username)
     unavailable_groups = set(user_limits.get("unavailable_groups", []))
     all_live_cats = get_cache().get("live_categories", [])
     live_categories = [
         cat for cat in all_live_cats if f"cat:{cat['category_id']}" not in unavailable_groups
     ]
+    vod_categories = get_cache().get("vod_categories", [])
+    series_categories = get_cache().get("series_categories", [])
 
     return TEMPLATES.TemplateResponse(
         request,
@@ -1908,7 +1967,12 @@ async def settings_page(request: Request, user: Annotated[dict, Depends(require_
             # User settings
             "captions_enabled": user_settings.get("captions_enabled", False),
             "live_categories": live_categories,
+            "vod_categories": vod_categories,
+            "series_categories": series_categories,
+            "source_names": source_names,
             "selected_cats": user_settings.get("guide_filter", []),
+            "selected_vod_cats": user_settings.get("vod_filter", []),
+            "selected_series_cats": user_settings.get("series_filter", []),
             "cc_lang": user_settings.get("cc_lang", ""),
             "cc_style": user_settings.get("cc_style", {}),
             "cast_host": user_settings.get("cast_host", ""),
@@ -1929,6 +1993,38 @@ async def settings_guide_filter(
         raise HTTPException(400, "Invalid filter list")
     user_settings = load_user_settings(username)
     user_settings["guide_filter"] = cats
+    save_user_settings(username, user_settings)
+    return {"status": "ok"}
+
+
+@app.post("/settings/vod-filter")
+async def settings_vod_filter(
+    request: Request,
+    user: Annotated[dict, Depends(require_auth)],
+):
+    username = user.get("sub", "")
+    data = await request.json()
+    cats = data.get("cats", [])
+    if not isinstance(cats, list) or len(cats) > 500:
+        raise HTTPException(400, "Invalid filter list")
+    user_settings = load_user_settings(username)
+    user_settings["vod_filter"] = cats
+    save_user_settings(username, user_settings)
+    return {"status": "ok"}
+
+
+@app.post("/settings/series-filter")
+async def settings_series_filter(
+    request: Request,
+    user: Annotated[dict, Depends(require_auth)],
+):
+    username = user.get("sub", "")
+    data = await request.json()
+    cats = data.get("cats", [])
+    if not isinstance(cats, list) or len(cats) > 500:
+        raise HTTPException(400, "Invalid filter list")
+    user_settings = load_user_settings(username)
+    user_settings["series_filter"] = cats
     save_user_settings(username, user_settings)
     return {"status": "ok"}
 

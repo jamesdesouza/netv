@@ -255,12 +255,90 @@
     setupSearch('cat-search', 'cat-search-clear', '#filters .cat-chip');
 
     document.getElementById('cat-move-all-right')?.addEventListener('click', async () => {
-      availableContainer.querySelectorAll('.cat-chip').forEach(c => unavailableContainer.appendChild(c));
+      availableContainer.querySelectorAll('.cat-chip:not([style*="display: none"])').forEach(c => unavailableContainer.appendChild(c));
       await save(unavailableContainer);
     });
 
     document.getElementById('cat-move-all-left')?.addEventListener('click', async () => {
-      unavailableContainer.querySelectorAll('.cat-chip').forEach(c => availableContainer.appendChild(c));
+      unavailableContainer.querySelectorAll('.cat-chip:not([style*="display: none"])').forEach(c => availableContainer.appendChild(c));
+      await save(availableContainer);
+    });
+  }
+
+  // ============================================================
+  // VOD Category Filter
+  // ============================================================
+
+  function setupVodCategoryFilter() {
+    const availableContainer = document.getElementById('available-vod-cats');
+    const unavailableContainer = document.getElementById('unavailable-vod-cats');
+    if (!availableContainer || !unavailableContainer) return;
+
+    async function save(container) {
+      const cats = Array.from(availableContainer.querySelectorAll('.vod-cat-chip')).map(el => el.dataset.id);
+      await saveWithFeedback(
+        '/settings/vod-filter',
+        { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cats}) },
+        container
+      );
+    }
+
+    // Initialize order from config
+    const chipById = {};
+    unavailableContainer.querySelectorAll('.vod-cat-chip').forEach(el => chipById[el.dataset.id] = el);
+    (cfg.selectedVodCats || []).forEach(catId => {
+      if (chipById[catId]) availableContainer.appendChild(chipById[catId]);
+    });
+
+    setupDragDrop('#available-vod-cats, #unavailable-vod-cats', '#vod-filters .vod-cat-chip', save);
+    setupSearch('vod-cat-search', 'vod-cat-search-clear', '#vod-filters .vod-cat-chip');
+
+    document.getElementById('vod-cat-move-all-right')?.addEventListener('click', async () => {
+      availableContainer.querySelectorAll('.vod-cat-chip:not([style*="display: none"])').forEach(c => unavailableContainer.appendChild(c));
+      await save(unavailableContainer);
+    });
+
+    document.getElementById('vod-cat-move-all-left')?.addEventListener('click', async () => {
+      unavailableContainer.querySelectorAll('.vod-cat-chip:not([style*="display: none"])').forEach(c => availableContainer.appendChild(c));
+      await save(availableContainer);
+    });
+  }
+
+  // ============================================================
+  // Series Category Filter
+  // ============================================================
+
+  function setupSeriesCategoryFilter() {
+    const availableContainer = document.getElementById('available-series-cats');
+    const unavailableContainer = document.getElementById('unavailable-series-cats');
+    if (!availableContainer || !unavailableContainer) return;
+
+    async function save(container) {
+      const cats = Array.from(availableContainer.querySelectorAll('.series-cat-chip')).map(el => el.dataset.id);
+      await saveWithFeedback(
+        '/settings/series-filter',
+        { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cats}) },
+        container
+      );
+    }
+
+    // Initialize order from config
+    const chipById = {};
+    unavailableContainer.querySelectorAll('.series-cat-chip').forEach(el => chipById[el.dataset.id] = el);
+    (cfg.selectedSeriesCats || []).forEach(catId => {
+      if (chipById[catId]) availableContainer.appendChild(chipById[catId]);
+    });
+
+    setupDragDrop('#available-series-cats, #unavailable-series-cats', '#series-filters .series-cat-chip', save);
+    setupSearch('series-cat-search', 'series-cat-search-clear', '#series-filters .series-cat-chip');
+
+    document.getElementById('series-cat-move-all-right')?.addEventListener('click', async () => {
+      availableContainer.querySelectorAll('.series-cat-chip:not([style*="display: none"])').forEach(c => unavailableContainer.appendChild(c));
+      await save(unavailableContainer);
+    });
+
+    document.getElementById('series-cat-move-all-left')?.addEventListener('click', async () => {
+      unavailableContainer.querySelectorAll('.series-cat-chip:not([style*="display: none"])').forEach(c => availableContainer.appendChild(c));
       await save(availableContainer);
     });
   }
@@ -616,13 +694,13 @@
       document.getElementById('add-user-block-all')?.addEventListener('click', () => {
         const avail = document.getElementById('add-user-available-groups');
         const unavail = document.getElementById('add-user-unavailable-groups');
-        avail?.querySelectorAll('.add-user-group-chip').forEach(c => unavail?.appendChild(c));
+        avail?.querySelectorAll('.add-user-group-chip:not([style*="display: none"])').forEach(c => unavail?.appendChild(c));
       });
 
       document.getElementById('add-user-allow-all')?.addEventListener('click', () => {
         const avail = document.getElementById('add-user-available-groups');
         const unavail = document.getElementById('add-user-unavailable-groups');
-        unavail?.querySelectorAll('.add-user-group-chip').forEach(c => avail?.appendChild(c));
+        unavail?.querySelectorAll('.add-user-group-chip:not([style*="display: none"])').forEach(c => avail?.appendChild(c));
       });
 
       addUserForm.addEventListener('submit', async function(e) {
@@ -759,7 +837,7 @@
         if (!username) return;
         const avail = document.querySelector(`.user-available-groups[data-username="${username}"]`);
         const unavail = document.querySelector(`.user-unavailable-groups[data-username="${username}"]`);
-        avail?.querySelectorAll('.group-chip').forEach(c => unavail?.appendChild(c));
+        avail?.querySelectorAll('.group-chip:not([style*="display: none"])').forEach(c => unavail?.appendChild(c));
         await saveGroups(username, unavail);
       });
     });
@@ -770,7 +848,7 @@
         if (!username) return;
         const avail = document.querySelector(`.user-available-groups[data-username="${username}"]`);
         const unavail = document.querySelector(`.user-unavailable-groups[data-username="${username}"]`);
-        unavail?.querySelectorAll('.group-chip').forEach(c => avail?.appendChild(c));
+        unavail?.querySelectorAll('.group-chip:not([style*="display: none"])').forEach(c => avail?.appendChild(c));
         await saveGroups(username, avail);
       });
     });
@@ -784,6 +862,8 @@
     setupSourceTypeSelect();
     setupSourceEditForms();
     setupCategoryFilter();
+    setupVodCategoryFilter();
+    setupSeriesCategoryFilter();
     setupChromeCcLink();
     setupCaptionSettings();
     setupTranscodeSettings();

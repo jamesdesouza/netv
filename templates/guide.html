@@ -386,8 +386,19 @@
       clearTimeout(scrollTimer);
       scrollTimer = setTimeout(() => sessionStorage.setItem(scrollKey, gridContainer.scrollTop), 100);
     });
+    // Save immediately when clicking any link (before navigation)
+    gridContainer.addEventListener('click', (e) => {
+      if (e.target.closest('a')) sessionStorage.setItem(scrollKey, gridContainer.scrollTop);
+    });
     // Save before page unload (catches all navigation/reloads)
     window.addEventListener('beforeunload', () => sessionStorage.setItem(scrollKey, gridContainer.scrollTop));
+    // Restore on bfcache navigation (pageshow fires when page is restored from cache)
+    window.addEventListener('pageshow', (e) => {
+      if (e.persisted) {
+        const saved = sessionStorage.getItem(scrollKey);
+        if (saved) gridContainer.scrollTop = parseInt(saved);
+      }
+    });
   }
 
   // Initial focus
