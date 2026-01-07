@@ -121,7 +121,7 @@ class TestBuildVideoArgs:
         assert "scale_cuda" in vf
 
     def test_nvidia_sw_fallback_filters(self):
-        """Test NVIDIA without hw pipeline uses software filters."""
+        """Test NVIDIA without hw pipeline uses SW decode + GPU scale."""
         pre, post = _build_video_args(
             copy_video=False,
             hw="nvidia",
@@ -132,8 +132,10 @@ class TestBuildVideoArgs:
         )
         assert pre == []
         vf = post[post.index("-vf") + 1]
+        # SW deinterlace, then upload to GPU for scaling
         assert "yadif=1" in vf
-        assert "cuda" not in vf
+        assert "hwupload_cuda" in vf
+        assert "scale_cuda" in vf
 
     def test_vaapi_filters(self):
         """Test VAAPI uses VAAPI filters."""

@@ -664,11 +664,14 @@ def _build_video_args(
             scale = f"scale_cuda=-2:{h}:format=nv12" if h else "scale_cuda=format=nv12"
             vf = f"yadif_cuda=1,{scale}" if deinterlace else scale
         else:
+            # Software decode, upload to GPU for scaling/encoding
             pre = []
+            scale = f"scale_cuda=-2:{h}:format=nv12" if h else "scale_cuda=format=nv12"
             if deinterlace:
-                vf = f"yadif=1,scale=-2:{h}" if h else "yadif=1"
+                # yadif on CPU, then upload and scale on GPU
+                vf = f"yadif=1,format=nv12,hwupload_cuda,{scale}"
             else:
-                vf = f"scale=-2:{h},format=nv12" if h else "format=nv12"
+                vf = f"format=nv12,hwupload_cuda,{scale}"
         preset = "p4" if deinterlace else "p2"
         encoder = "h264_nvenc"
         enc_opts = ["-preset", preset, "-rc", "constqp", "-qp", str(qp)]
@@ -686,16 +689,14 @@ def _build_video_args(
             scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
             vf = f"deinterlace_vaapi,{scale}" if deinterlace else scale
         else:
-            # Software decode, upload to GPU for encoding
+            # Software decode, upload to GPU for scaling/encoding
             pre = ["-vaapi_device", "/dev/dri/renderD128"]
+            scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
             if deinterlace:
-                vf = (
-                    f"yadif=1,scale=-2:{h},format=nv12,hwupload"
-                    if h
-                    else "yadif=1,format=nv12,hwupload"
-                )
+                # yadif on CPU, then upload and scale on GPU
+                vf = f"yadif=1,format=nv12,hwupload,{scale}"
             else:
-                vf = f"scale=-2:{h},format=nv12,hwupload" if h else "format=nv12,hwupload"
+                vf = f"format=nv12,hwupload,{scale}"
         encoder = "h264_vaapi"
         enc_opts = ["-rc_mode", "CQP", "-qp", str(qp)]
 
@@ -705,12 +706,14 @@ def _build_video_args(
             scale = f"scale_qsv=w=-2:h={h}:format=nv12" if h else "scale_qsv=format=nv12"
             vf = f"vpp_qsv=deinterlace=2,{scale}" if deinterlace else scale
         else:
-            # Software decode, QSV encode (encoder handles upload)
-            pre = []
+            # Software decode, upload to GPU for scaling/encoding
+            pre = ["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw"]
+            scale = f"scale_qsv=w=-2:h={h}:format=nv12" if h else "scale_qsv=format=nv12"
             if deinterlace:
-                vf = f"yadif=1,scale=-2:{h}" if h else "yadif=1"
+                # yadif on CPU, then upload and scale on GPU
+                vf = f"yadif=1,format=nv12,hwupload=extra_hw_frames=64,{scale}"
             else:
-                vf = f"scale=-2:{h},format=nv12" if h else "format=nv12"
+                vf = f"format=nv12,hwupload=extra_hw_frames=64,{scale}"
         encoder = "h264_qsv"
         enc_opts = ["-preset", "medium", "-global_quality", str(qp)]
 
