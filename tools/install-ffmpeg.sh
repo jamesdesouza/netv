@@ -91,7 +91,7 @@ APT_PACKAGES=(
     automake
     build-essential
     cmake
-    git-core
+    git
     meson
     nasm
     ninja-build
@@ -224,9 +224,9 @@ make install
 
 # libvmaf
 cd "$SRC_DIR" &&
-git -C vmaf-master pull 2>/dev/null || (rm -rf vmaf-master && git clone --depth 1 https://github.com/Netflix/vmaf vmaf-master) &&
-mkdir -p 'vmaf-master/libvmaf/build' &&
-cd 'vmaf-master/libvmaf/build' &&
+git -C vmaf pull 2>/dev/null || (rm -rf vmaf && git clone --depth 1 https://github.com/Netflix/vmaf) &&
+mkdir -p vmaf/libvmaf/build &&
+cd vmaf/libvmaf/build &&
 if [ -f build.ninja ]; then
     meson setup --reconfigure -Denable_tests=false -Denable_docs=false --buildtype=release --default-library=static '../' --prefix "$BUILD_DIR" --bindir="$BIN_DIR" --libdir="$BUILD_DIR/lib"
 else
