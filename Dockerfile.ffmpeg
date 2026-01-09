@@ -135,6 +135,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     [ "$BUILD_LIBX264" != "1" ] && APT_PKGS="$APT_PKGS libx264-164" ; \
     if [ -n "$APT_PKGS" ]; then apt-get update && apt-get install -y --no-install-recommends $APT_PKGS; fi
 
+# Tell libva where to find system drivers (intel-media-va-driver, mesa-va-drivers)
+# Our libva is built with prefix=/opt/ffmpeg_build but drivers are system-installed
+ENV LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
+
 # Copy FFmpeg binaries from builder
 COPY --from=builder /opt/bin/ffmpeg /usr/local/bin/
 COPY --from=builder /opt/bin/ffprobe /usr/local/bin/
