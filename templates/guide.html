@@ -184,7 +184,7 @@
            tabindex="0" data-nav="epg" data-row="{{ row_idx }}" data-col="{{ loop.index0 }}"
            title="{{ prog.title }}&#10;{{ prog.start }} - {{ prog.end }}&#10;{{ prog.desc }}">
           <div class="text-sm font-medium truncate">{{ prog.title }}</div>
-          <div class="text-xs text-gray-400 truncate">{{ prog.start }} - {{ prog.end }}</div>
+          <div class="text-xs text-gray-400 truncate">{{ prog.desc }}</div>
         </a>
         {% endfor %}
         {% else %}

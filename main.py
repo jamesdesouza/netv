@@ -678,8 +678,17 @@ async def guide_page(
     window_start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=offset)
     window_end = window_start + timedelta(hours=3)
 
+    # Build preferred_sources: map epg_channel_id -> stream's source_id
+    # This prefers EPG from the same source as the channel (e.g., HDHomeRun EPG for HDHomeRun channels)
+    preferred_sources = {
+        epg_id: s.get("source_id", "")
+        for s, epg_id in zip(streams, epg_ids, strict=False)
+        if epg_id and s.get("source_id")
+    }
     programs_map = (
-        epg.get_programs_batch(epg_ids_set, window_start, window_end) if epg_ids_set else {}
+        epg.get_programs_batch(epg_ids_set, window_start, window_end, preferred_sources)
+        if epg_ids_set
+        else {}
     )
 
     # Log streams with EPG IDs that returned no programs (potential misconfiguration)

@@ -196,12 +196,42 @@ def get_programs_in_range(
 _MAX_IN_CLAUSE = 500  # SQLite limit is 999, stay well below
 
 
+def _dedupe_programs(programs: list[Program], preferred_source_id: str) -> list[Program]:
+    """Deduplicate overlapping programs, preferring the preferred source."""
+    if not preferred_source_id or len(programs) <= 1:
+        return programs
+    result: list[Program] = []
+    for p in programs:
+        dominated = False
+        for i, existing in enumerate(result):
+            # Check for overlap
+            if p.start < existing.stop and p.stop > existing.start:
+                # Prefer the preferred source
+                if p.source_id == preferred_source_id and existing.source_id != preferred_source_id:
+                    result[i] = p
+                dominated = True
+                break
+        if not dominated:
+            result.append(p)
+    return sorted(result, key=lambda p: p.start)
+
+
 def get_programs_batch(
     channel_ids: list[str],
     start: datetime,
     end: datetime,
+    preferred_sources: dict[str, str] | None = None,
 ) -> dict[str, list[Program]]:
-    """Get programs for multiple channels in a single query."""
+    """Get programs for multiple channels in a single query.
+
+    Args:
+        channel_ids: List of EPG channel IDs to query
+        start: Start of time window
+        end: End of time window
+        preferred_sources: Optional dict mapping channel_id -> preferred source_id
+            for deduplication. If provided, overlapping programs from the preferred
+            source will be kept over programs from other sources.
+    """
     if not channel_ids:
         return {}
     conn = _get_conn()
@@ -233,6 +263,13 @@ def get_programs_batch(
                     source_id=row["source_id"] or "",
                 )
             )
+
+    # Deduplicate overlapping programs if preferred_sources provided
+    if preferred_sources:
+        for ch_id in result:
+            if ch_id in preferred_sources and result[ch_id]:
+                result[ch_id] = _dedupe_programs(result[ch_id], preferred_sources[ch_id])
+
     channels_with_programs = sum(1 for progs in result.values() if progs)
     log.debug(
         "EPG batch query: requested %d channel IDs, found programs for %d",
