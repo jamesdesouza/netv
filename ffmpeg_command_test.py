@@ -29,6 +29,13 @@ from ffmpeg_command import (
 )
 
 
+@pytest.fixture(autouse=True)
+def mock_vaapi_device():
+    """Mock VAAPI_DEVICE for all tests to allow VAAPI tests on CI without hardware."""
+    with patch("ffmpeg_command.VAAPI_DEVICE", "/dev/dri/renderD128"):
+        yield
+
+
 class FakeMediaInfo:
     """Fake media info for testing."""
 

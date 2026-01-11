@@ -249,7 +249,12 @@ class TestEncoderDetection:
 
     def test_detect_encoders_all_available(self):
         """Test detect_encoders when all hardware is available."""
-        with mock.patch.object(cache, "_test_encoder", return_value=(True, "")):
+        with (
+            mock.patch.object(cache, "_test_encoder", return_value=(True, "")),
+            mock.patch.object(cache, "VAAPI_DEVICE", "/dev/dri/renderD128"),
+            mock.patch.object(cache, "LIBVA_DRIVER", "i965"),
+            mock.patch.object(cache, "DRI_PATH", "/usr/lib/x86_64-linux-gnu/dri"),
+        ):
             result = cache.detect_encoders()
             assert result == {
                 "nvenc": True,
@@ -278,7 +283,12 @@ class TestEncoderDetection:
                 return True, ""
             return False, "not available"
 
-        with mock.patch.object(cache, "_test_encoder", side_effect=mock_test):
+        with (
+            mock.patch.object(cache, "_test_encoder", side_effect=mock_test),
+            mock.patch.object(cache, "VAAPI_DEVICE", "/dev/dri/renderD128"),
+            mock.patch.object(cache, "LIBVA_DRIVER", "i965"),
+            mock.patch.object(cache, "DRI_PATH", "/usr/lib/x86_64-linux-gnu/dri"),
+        ):
             result = cache.detect_encoders()
             assert result["nvenc"] is False
             assert result["amf"] is False
