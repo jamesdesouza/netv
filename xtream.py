@@ -87,8 +87,8 @@ class XtreamClient:
 
     def build_stream_url(self, stream_type: str, stream_id: int, ext: str = "") -> str:
         # URL-encode username/password to handle special chars like # in passwords
-        user = urllib.parse.quote(self.username, safe='')
-        pwd = urllib.parse.quote(self.password, safe='')
+        user = urllib.parse.quote(self.username, safe="")
+        pwd = urllib.parse.quote(self.password, safe="")
         base = f"{self.base_url}/{stream_type}/{user}/{pwd}/{stream_id}"
         return f"{base}.{ext}" if ext else base
 
@@ -101,12 +101,9 @@ class XtreamClient:
     ) -> str:
         """For streams with tv_archive=1. start format: YYYY-MM-DD:HH-MM."""
         # URL-encode username/password to handle special chars like # in passwords
-        user = urllib.parse.quote(self.username, safe='')
-        pwd = urllib.parse.quote(self.password, safe='')
-        return (
-            f"{self.base_url}/timeshift/{user}/{pwd}/"
-            f"{duration}/{start}/{stream_id}.{ext}"
-        )
+        user = urllib.parse.quote(self.username, safe="")
+        pwd = urllib.parse.quote(self.password, safe="")
+        return f"{self.base_url}/timeshift/{user}/{pwd}/{duration}/{start}/{stream_id}.{ext}"
 
     @property
     def epg_url(self) -> str:

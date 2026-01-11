@@ -644,9 +644,7 @@ async def guide_page(
     # Virtual scrolling: only render first batch (130 rows)
     # JS will handle fetching more as user scrolls
     initial_batch_size = 130
-    grid_data = _build_guide_rows(
-        streams, 0, initial_batch_size, window_start, window_end
-    )
+    grid_data = _build_guide_rows(streams, 0, initial_batch_size, window_start, window_end)
 
     # Time markers (every 30 min) - convert to local time for display
     time_markers = []
@@ -695,9 +693,7 @@ async def guide_page(
     )
 
 
-def _get_guide_streams(
-    cats: str, username: str
-) -> tuple[list[dict], list[str], set[str]]:
+def _get_guide_streams(cats: str, username: str) -> tuple[list[dict], list[str], set[str]]:
     """Get filtered and sorted streams for guide.
 
     Returns:
@@ -733,8 +729,7 @@ def _get_guide_streams(
     streams = [
         s
         for s in all_streams
-        if any(str(c) in selected_cats for c in (s.get("category_ids") or []))
-        and stream_allowed(s)
+        if any(str(c) in selected_cats for c in (s.get("category_ids") or [])) and stream_allowed(s)
     ]
     streams.sort(key=stream_sort_key)
 
@@ -782,9 +777,7 @@ def _build_guide_rows(
     window_end_mobile = window_start + timedelta(hours=2)
     grid_data = []
 
-    for idx, (s, epg_id) in enumerate(
-        zip(slice_streams, epg_ids, strict=False), start=start_idx
-    ):
+    for idx, (s, epg_id) in enumerate(zip(slice_streams, epg_ids, strict=False), start=start_idx):
         icon = s.get("stream_icon", "") or icons_map.get(epg_id, "")
         ch = {
             "stream_id": s["stream_id"],
@@ -869,9 +862,7 @@ async def guide_rows_api(
 
     # Time window
     now = datetime.now(UTC)
-    window_start = now.replace(minute=0, second=0, microsecond=0) + timedelta(
-        hours=offset
-    )
+    window_start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=offset)
     window_end = window_start + timedelta(hours=3)
 
     rows = _build_guide_rows(streams, start, count, window_start, window_end)
@@ -1309,8 +1300,8 @@ def _get_live_player_info(stream_id: str) -> PlayerInfo:
         base, user, pwd = stream["source_url"], stream["source_username"], stream["source_password"]
         orig_id = stream_id.split("_")[-1] if "_" in stream_id else stream_id
         # URL-encode username/password to handle special chars like # in passwords
-        user = urllib.parse.quote(user, safe='')
-        pwd = urllib.parse.quote(pwd, safe='')
+        user = urllib.parse.quote(user, safe="")
+        pwd = urllib.parse.quote(pwd, safe="")
         info.url = f"{base}/live/{user}/{pwd}/{orig_id}.m3u8"
 
     # Look up source settings

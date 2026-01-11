@@ -9,7 +9,6 @@ from typing import Any
 import hashlib
 import json
 import logging
-import os
 import pathlib
 import subprocess
 import threading
@@ -60,9 +59,8 @@ def _detect_vaapi_device() -> str | None:
                 # Extract PCI address (first field, e.g., "00:02.0")
                 pci_addr = "0000:" + line.split()[0]
                 # Check vendor ID in brackets like [8086:0402] or [1002:...]
-                if "[8086:" in line or "[1002:" in line:
-                    if pci_addr in pci_to_render:
-                        return pci_to_render[pci_addr]
+                if ("[8086:" in line or "[1002:" in line) and pci_addr in pci_to_render:
+                    return pci_to_render[pci_addr]
     except Exception:
         pass
 
@@ -105,8 +103,8 @@ def _detect_dri_path() -> str | None:
     # Check common locations in order of preference
     candidates = [
         "/usr/lib/x86_64-linux-gnu/dri",  # Debian/Ubuntu
-        "/usr/lib64/dri",                  # Fedora/RHEL
-        "/usr/lib/dri",                    # Arch
+        "/usr/lib64/dri",  # Fedora/RHEL
+        "/usr/lib/dri",  # Arch
     ]
     for path in candidates:
         if pathlib.Path(path).is_dir():
@@ -339,6 +337,7 @@ def _test_encoder(cmd: list[str], timeout: int = 5, env: dict | None = None) -> 
         run_env = None
         if env:
             import os
+
             run_env = os.environ.copy()
             run_env.update(env)
         result = subprocess.run(cmd, capture_output=True, timeout=timeout, env=run_env)
@@ -419,7 +418,9 @@ def detect_encoders() -> dict[str, bool]:
         )
         encoders["vaapi"] = ok
         if ok:
-            log.info("  VAAPI (h264_vaapi): available (device=%s, driver=%s)", VAAPI_DEVICE, LIBVA_DRIVER)
+            log.info(
+                "  VAAPI (h264_vaapi): available (device=%s, driver=%s)", VAAPI_DEVICE, LIBVA_DRIVER
+            )
         else:
             log.info("  VAAPI (h264_vaapi): unavailable - %s", err)
     else:
@@ -482,7 +483,9 @@ def load_server_settings() -> dict[str, Any]:
     # Migrate old transcode_hw values to new format
     old_hw = data.get("transcode_hw", "")
     if old_hw == "nvidia":
-        data["transcode_hw"] = "nvenc+vaapi" if AVAILABLE_ENCODERS.get("vaapi") else "nvenc+software"
+        data["transcode_hw"] = (
+            "nvenc+vaapi" if AVAILABLE_ENCODERS.get("vaapi") else "nvenc+software"
+        )
     elif old_hw == "intel":
         data["transcode_hw"] = "qsv"
     # "vaapi" and "software" remain unchanged

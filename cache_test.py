@@ -96,7 +96,15 @@ class TestSettings:
         settings = cache_module.load_server_settings()
         assert settings["sources"] == []
         assert settings["transcode_mode"] == "auto"
-        assert settings["transcode_hw"] in ("nvidia", "intel", "vaapi", "software")
+        assert settings["transcode_hw"] in (
+            "nvenc+vaapi",
+            "nvenc+software",
+            "amf+vaapi",
+            "amf+software",
+            "qsv",
+            "vaapi",
+            "software",
+        )
         assert settings["probe_movies"] is True
 
     def test_save_and_load_settings(self, cache_module):
@@ -244,10 +252,10 @@ class TestEncoderDetection:
         with mock.patch.object(cache, "_test_encoder", return_value=(True, "")):
             result = cache.detect_encoders()
             assert result == {
-                "nvidia": True,
-                "intel": True,
+                "nvenc": True,
+                "amf": True,
+                "qsv": True,
                 "vaapi": True,
-                "software": True,
             }
 
     def test_detect_encoders_none_available(self):
@@ -255,76 +263,85 @@ class TestEncoderDetection:
         with mock.patch.object(cache, "_test_encoder", return_value=(False, "not found")):
             result = cache.detect_encoders()
             assert result == {
-                "nvidia": False,
-                "intel": False,
+                "nvenc": False,
+                "amf": False,
+                "qsv": False,
                 "vaapi": False,
-                "software": False,
             }
 
     def test_detect_encoders_partial(self):
         """Test detect_encoders with mixed hardware availability."""
 
-        def mock_test(cmd, timeout=5):
-            # Return True only for software (libx264)
-            if "libx264" in cmd:
+        def mock_test(cmd, timeout=5, env=None):
+            # Return True only for VAAPI
+            if "h264_vaapi" in cmd:
                 return True, ""
             return False, "not available"
 
         with mock.patch.object(cache, "_test_encoder", side_effect=mock_test):
             result = cache.detect_encoders()
-            assert result["nvidia"] is False
-            assert result["intel"] is False
-            assert result["vaapi"] is False
-            assert result["software"] is True
+            assert result["nvenc"] is False
+            assert result["amf"] is False
+            assert result["qsv"] is False
+            assert result["vaapi"] is True
 
-    def test_detect_encoders_nvidia_only(self):
-        """Test detect_encoders when only NVIDIA is available."""
+    def test_detect_encoders_nvenc_only(self):
+        """Test detect_encoders when only NVENC is available."""
 
-        def mock_test(cmd, timeout=5):
+        def mock_test(cmd, timeout=5, env=None):
             if "h264_nvenc" in cmd:
                 return True, ""
             return False, "not available"
 
         with mock.patch.object(cache, "_test_encoder", side_effect=mock_test):
             result = cache.detect_encoders()
-            assert result["nvidia"] is True
-            assert result["intel"] is False
+            assert result["nvenc"] is True
+            assert result["amf"] is False
+            assert result["qsv"] is False
             assert result["vaapi"] is False
-            assert result["software"] is False
 
     def test_detect_encoders_vaapi_command_structure(self):
-        """Test detect_encoders passes correct VAAPI command structure."""
+        """Test detect_encoders passes correct VAAPI command structure when GPU detected."""
         captured_cmds = []
+        captured_envs = []
 
-        def capture_cmd(cmd, timeout=5):
+        def capture_cmd(cmd, timeout=5, env=None):
             captured_cmds.append(cmd)
+            captured_envs.append(env)
             return False, "test"
 
-        with mock.patch.object(cache, "_test_encoder", side_effect=capture_cmd):
+        # Mock auto-detected VAAPI device
+        with (
+            mock.patch.object(cache, "_test_encoder", side_effect=capture_cmd),
+            mock.patch.object(cache, "VAAPI_DEVICE", "/dev/dri/renderD128"),
+            mock.patch.object(cache, "LIBVA_DRIVER", "i965"),
+            mock.patch.object(cache, "DRI_PATH", "/usr/lib/x86_64-linux-gnu/dri"),
+        ):
             cache.detect_encoders()
 
         # Find VAAPI command
-        vaapi_cmd = [c for c in captured_cmds if "h264_vaapi" in c][0]
-        assert "-vaapi_device" in vaapi_cmd
-        assert "/dev/dri/renderD128" in vaapi_cmd
+        vaapi_cmds = [c for c in captured_cmds if "h264_vaapi" in c]
+        assert len(vaapi_cmds) == 1
+        vaapi_cmd = vaapi_cmds[0]
+        assert "-init_hw_device" in vaapi_cmd
         assert "hwupload" in " ".join(vaapi_cmd)
 
-    def test_detect_encoders_intel_command_structure(self):
-        """Test detect_encoders passes correct Intel QSV command structure."""
+    def test_detect_encoders_qsv_command_structure(self):
+        """Test detect_encoders passes correct QSV command structure."""
         captured_cmds = []
 
-        def capture_cmd(cmd, timeout=5):
+        def capture_cmd(cmd, timeout=5, env=None):
             captured_cmds.append(cmd)
             return False, "test"
 
         with mock.patch.object(cache, "_test_encoder", side_effect=capture_cmd):
             cache.detect_encoders()
 
-        # Find Intel QSV command
-        intel_cmd = [c for c in captured_cmds if "h264_qsv" in c][0]
-        assert "-hwaccel" in intel_cmd
-        assert "qsv" in intel_cmd
-        assert "-hwaccel_output_format" in intel_cmd
+        # Find QSV command
+        qsv_cmd = [c for c in captured_cmds if "h264_qsv" in c][0]
+        assert "-hwaccel" in qsv_cmd
+        assert "qsv" in qsv_cmd
+        assert "-hwaccel_output_format" in qsv_cmd
 
     def test_refresh_encoders_updates_global(self):
         """Test refresh_encoders updates AVAILABLE_ENCODERS."""
@@ -333,56 +350,84 @@ class TestEncoderDetection:
         with mock.patch.object(
             cache,
             "detect_encoders",
-            return_value={"nvidia": True, "intel": True, "vaapi": True, "software": True},
+            return_value={"nvenc": True, "amf": True, "qsv": True, "vaapi": True},
         ):
             result = cache.refresh_encoders()
             assert cache.AVAILABLE_ENCODERS == {
-                "nvidia": True,
-                "intel": True,
+                "nvenc": True,
+                "amf": True,
+                "qsv": True,
                 "vaapi": True,
-                "software": True,
             }
             assert result == cache.AVAILABLE_ENCODERS
 
         # Restore original
         cache.AVAILABLE_ENCODERS = original
 
-    def test_default_encoder_prefers_nvidia(self):
-        """Test _default_encoder prefers NVIDIA when available."""
+    def test_default_encoder_prefers_nvenc_with_vaapi(self):
+        """Test _default_encoder prefers NVENC+VAAPI when both available."""
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
-            "nvidia": True,
-            "intel": True,
+            "nvenc": True,
+            "amf": True,
+            "qsv": True,
             "vaapi": True,
-            "software": True,
         }
         try:
-            assert cache._default_encoder() == "nvidia"
+            assert cache._default_encoder() == "nvenc+vaapi"
         finally:
             cache.AVAILABLE_ENCODERS = original
 
-    def test_default_encoder_falls_back_to_intel(self):
-        """Test _default_encoder falls back to Intel when NVIDIA unavailable."""
+    def test_default_encoder_nvenc_without_vaapi(self):
+        """Test _default_encoder uses NVENC+software when VAAPI unavailable."""
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
-            "nvidia": False,
-            "intel": True,
-            "vaapi": True,
-            "software": True,
+            "nvenc": True,
+            "amf": False,
+            "qsv": False,
+            "vaapi": False,
         }
         try:
-            assert cache._default_encoder() == "intel"
+            assert cache._default_encoder() == "nvenc+software"
+        finally:
+            cache.AVAILABLE_ENCODERS = original
+
+    def test_default_encoder_falls_back_to_amf(self):
+        """Test _default_encoder falls back to AMF when NVENC unavailable."""
+        original = cache.AVAILABLE_ENCODERS.copy()
+        cache.AVAILABLE_ENCODERS = {
+            "nvenc": False,
+            "amf": True,
+            "qsv": True,
+            "vaapi": True,
+        }
+        try:
+            assert cache._default_encoder() == "amf+vaapi"
+        finally:
+            cache.AVAILABLE_ENCODERS = original
+
+    def test_default_encoder_falls_back_to_qsv(self):
+        """Test _default_encoder falls back to QSV when NVENC/AMF unavailable."""
+        original = cache.AVAILABLE_ENCODERS.copy()
+        cache.AVAILABLE_ENCODERS = {
+            "nvenc": False,
+            "amf": False,
+            "qsv": True,
+            "vaapi": True,
+        }
+        try:
+            assert cache._default_encoder() == "qsv"
         finally:
             cache.AVAILABLE_ENCODERS = original
 
     def test_default_encoder_falls_back_to_vaapi(self):
-        """Test _default_encoder falls back to VAAPI when NVIDIA/Intel unavailable."""
+        """Test _default_encoder falls back to VAAPI when NVENC/AMF/QSV unavailable."""
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
-            "nvidia": False,
-            "intel": False,
+            "nvenc": False,
+            "amf": False,
+            "qsv": False,
             "vaapi": True,
-            "software": True,
         }
         try:
             assert cache._default_encoder() == "vaapi"
@@ -393,24 +438,10 @@ class TestEncoderDetection:
         """Test _default_encoder falls back to software as last resort."""
         original = cache.AVAILABLE_ENCODERS.copy()
         cache.AVAILABLE_ENCODERS = {
-            "nvidia": False,
-            "intel": False,
+            "nvenc": False,
+            "amf": False,
+            "qsv": False,
             "vaapi": False,
-            "software": True,
-        }
-        try:
-            assert cache._default_encoder() == "software"
-        finally:
-            cache.AVAILABLE_ENCODERS = original
-
-    def test_default_encoder_returns_software_when_none_available(self):
-        """Test _default_encoder returns software even when nothing works."""
-        original = cache.AVAILABLE_ENCODERS.copy()
-        cache.AVAILABLE_ENCODERS = {
-            "nvidia": False,
-            "intel": False,
-            "vaapi": False,
-            "software": False,
         }
         try:
             assert cache._default_encoder() == "software"

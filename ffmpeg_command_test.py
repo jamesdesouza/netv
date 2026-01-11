@@ -44,6 +44,7 @@ class FakeMediaInfo:
         interlaced: bool = False,
         is_10bit: bool = False,
         is_hdr: bool = False,
+        is_hls: bool = False,
     ):
         self.video_codec = video_codec
         self.audio_codec = audio_codec
@@ -55,6 +56,7 @@ class FakeMediaInfo:
         self.interlaced = interlaced
         self.is_10bit = is_10bit
         self.is_hdr = is_hdr
+        self.is_hls = is_hls
 
 
 # =============================================================================
@@ -65,7 +67,10 @@ class FakeMediaInfo:
 class TestBuildVideoArgs:
     """Tests for _build_video_args."""
 
-    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    @pytest.mark.parametrize(
+        "hw",
+        ["nvenc+vaapi", "nvenc+software", "amf+vaapi", "amf+software", "qsv", "vaapi", "software"],
+    )
     @pytest.mark.parametrize("deinterlace", [True, False])
     @pytest.mark.parametrize("max_resolution", ["1080p", "720p", "4k"])
     def test_all_hw_combinations(self, hw: HwAccel, deinterlace: bool, max_resolution: str):
@@ -74,14 +79,14 @@ class TestBuildVideoArgs:
             copy_video=False,
             hw=hw,
             deinterlace=deinterlace,
-            use_hw_pipeline=(hw != "software"),
+            use_hw_pipeline=(hw not in ("software", "nvenc+software", "amf+software")),
             max_resolution=max_resolution,
             quality="high",
         )
 
-        if hw == "nvidia":
+        if hw in ("nvenc+vaapi", "nvenc+software") or hw in ("amf+vaapi", "amf+software"):
             assert pre == [] or "-hwaccel" in pre
-        elif hw == "intel":
+        elif hw == "qsv":
             assert "-hwaccel" in pre
             assert "qsv" in pre
         elif hw == "vaapi":
@@ -95,7 +100,10 @@ class TestBuildVideoArgs:
         assert "-g" in post
         assert "60" in post
 
-    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    @pytest.mark.parametrize(
+        "hw",
+        ["nvenc+vaapi", "nvenc+software", "amf+vaapi", "amf+software", "qsv", "vaapi", "software"],
+    )
     def test_copy_video(self, hw: HwAccel):
         """Test copy_video returns minimal args."""
         pre, post = _build_video_args(
@@ -109,11 +117,11 @@ class TestBuildVideoArgs:
         assert pre == []
         assert post == ["-c:v", "copy"]
 
-    def test_nvidia_hw_pipeline_filters(self):
-        """Test NVIDIA with hw pipeline uses CUDA filters."""
+    def test_nvenc_hw_pipeline_filters(self):
+        """Test NVENC with hw pipeline uses CUDA filters."""
         pre, post = _build_video_args(
             copy_video=False,
-            hw="nvidia",
+            hw="nvenc+software",
             deinterlace=True,
             use_hw_pipeline=True,
             max_resolution="1080p",
@@ -124,11 +132,11 @@ class TestBuildVideoArgs:
         assert "yadif_cuda" in vf
         assert "scale_cuda" in vf
 
-    def test_nvidia_sw_fallback_filters(self):
-        """Test NVIDIA without hw pipeline uses SW decode + GPU processing."""
+    def test_nvenc_sw_fallback_filters(self):
+        """Test NVENC without hw pipeline uses SW decode + GPU processing."""
         pre, post = _build_video_args(
             copy_video=False,
-            hw="nvidia",
+            hw="nvenc+software",
             deinterlace=True,
             use_hw_pipeline=False,
             max_resolution="1080p",
@@ -155,11 +163,11 @@ class TestBuildVideoArgs:
         assert "deinterlace_vaapi" in vf
         assert "scale_vaapi" in vf
 
-    def test_intel_filters(self):
-        """Test Intel uses QSV filters."""
+    def test_qsv_filters(self):
+        """Test QSV uses QSV filters."""
         pre, post = _build_video_args(
             copy_video=False,
-            hw="intel",
+            hw="qsv",
             deinterlace=True,
             use_hw_pipeline=True,
             max_resolution="1080p",
@@ -211,11 +219,11 @@ class TestBuildVideoArgs:
             )
 
     @patch("ffmpeg_command._has_libplacebo_filter", return_value=True)
-    def test_nvidia_hdr_with_libplacebo(self, mock_placebo):
-        """Test NVIDIA HDR uses libplacebo when available."""
+    def test_nvenc_hdr_with_libplacebo(self, mock_placebo):
+        """Test NVENC HDR uses libplacebo when available."""
         _, post = _build_video_args(
             copy_video=False,
-            hw="nvidia",
+            hw="nvenc+software",
             deinterlace=False,
             use_hw_pipeline=True,
             max_resolution="1080p",
@@ -230,11 +238,11 @@ class TestBuildVideoArgs:
         assert "hwupload_cuda" in vf
 
     @patch("ffmpeg_command._has_libplacebo_filter", return_value=False)
-    def test_nvidia_hdr_zscale_fallback(self, mock_placebo):
-        """Test NVIDIA HDR falls back to zscale when libplacebo unavailable."""
+    def test_nvenc_hdr_zscale_fallback(self, mock_placebo):
+        """Test NVENC HDR falls back to zscale when libplacebo unavailable."""
         _, post = _build_video_args(
             copy_video=False,
-            hw="nvidia",
+            hw="nvenc+software",
             deinterlace=False,
             use_hw_pipeline=True,
             max_resolution="1080p",
@@ -247,11 +255,11 @@ class TestBuildVideoArgs:
         assert "libplacebo" not in vf
 
     @patch("ffmpeg_command._has_libplacebo_filter", return_value=True)
-    def test_nvidia_hdr_deinterlace_order(self, mock_placebo):
-        """Test NVIDIA HDR hw decode deinterlaces BEFORE tonemap."""
+    def test_nvenc_hdr_deinterlace_order(self, mock_placebo):
+        """Test NVENC HDR hw decode deinterlaces BEFORE tonemap."""
         _, post = _build_video_args(
             copy_video=False,
-            hw="nvidia",
+            hw="nvenc+software",
             deinterlace=True,
             use_hw_pipeline=True,
             max_resolution="1080p",
@@ -265,11 +273,11 @@ class TestBuildVideoArgs:
         assert deint_pos < tonemap_pos, f"deinterlace should come before tonemap: {vf}"
 
     @patch("ffmpeg_command._has_libplacebo_filter", return_value=True)
-    def test_nvidia_sw_hdr_deinterlace_order(self, mock_placebo):
-        """Test NVIDIA HDR sw decode uses CPU deinterlace before tonemap."""
+    def test_nvenc_sw_hdr_deinterlace_order(self, mock_placebo):
+        """Test NVENC HDR sw decode uses CPU deinterlace before tonemap."""
         _, post = _build_video_args(
             copy_video=False,
-            hw="nvidia",
+            hw="nvenc+software",
             deinterlace=True,
             use_hw_pipeline=False,
             max_resolution="1080p",
@@ -335,7 +343,10 @@ class TestBuildAudioArgs:
 class TestBuildHlsFfmpegCmd:
     """Tests for build_hls_ffmpeg_cmd."""
 
-    @pytest.mark.parametrize("hw", ["nvidia", "intel", "vaapi", "software"])
+    @pytest.mark.parametrize(
+        "hw",
+        ["nvenc+vaapi", "nvenc+software", "amf+vaapi", "amf+software", "qsv", "vaapi", "software"],
+    )
     @pytest.mark.parametrize("is_vod", [True, False])
     def test_command_structure(self, hw: HwAccel, is_vod: bool):
         """Test command has correct structure for all hw/vod combinations."""

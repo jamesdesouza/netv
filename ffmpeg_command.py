@@ -21,7 +21,9 @@ from cache import VAAPI_DEVICE
 
 log = logging.getLogger(__name__)
 
-HwAccel = Literal["nvenc+vaapi", "nvenc+software", "amf+vaapi", "amf+software", "qsv", "vaapi", "software"]
+HwAccel = Literal[
+    "nvenc+vaapi", "nvenc+software", "amf+vaapi", "amf+software", "qsv", "vaapi", "software"
+]
 
 
 def _parse_hw(hw: HwAccel) -> tuple[str, str]:
@@ -30,6 +32,7 @@ def _parse_hw(hw: HwAccel) -> tuple[str, str]:
         encoder, fallback = hw.split("+", 1)
         return encoder, fallback
     return hw, "software"  # standalone options fallback to software
+
 
 # Timing constants
 _HLS_SEGMENT_DURATION_SEC = 3.0  # Short segments for faster startup/seeking
