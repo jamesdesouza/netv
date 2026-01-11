@@ -758,6 +758,7 @@
           if (cfg.isVod) document.getElementById('jump-btn')?.click();
           break;
         case 'n': document.getElementById('autonext-btn')?.click(); break;
+        case 'p': document.getElementById('pip-btn')?.click(); break;
         case 'h':
           const container = document.getElementById('player-container');
           if (container.classList.contains('controls-visible')) {
@@ -941,6 +942,25 @@
       updateCcButton();
       saveSettings({ ccEnabled });
     });
+
+    // PiP button
+    const pipBtn = document.getElementById('pip-btn');
+    if (pipBtn && document.pictureInPictureEnabled) {
+      pipBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();
+          } else {
+            await video.requestPictureInPicture();
+          }
+        } catch (err) {
+          console.error('[PiP] Error:', err);
+        }
+      });
+    } else if (pipBtn) {
+      pipBtn.style.display = 'none';
+    }
 
     // Settings menu toggle
     document.getElementById('settings-btn')?.addEventListener('click', () => {
