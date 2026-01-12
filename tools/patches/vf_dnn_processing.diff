@@ -1,0 +1,125 @@
+--- /tmp/ffmpeg-clean/libavfilter/vf_dnn_processing.c	2025-08-22 09:20:05.000000000 -0700
++++ /home/jvdillon/ffmpeg_sources/ffmpeg-snapshot/libavfilter/vf_dnn_processing.c	2026-01-12 12:26:43.666161570 -0800
+@@ -27,6 +27,7 @@
+ #include "libavutil/pixdesc.h"
+ #include "libavutil/avassert.h"
+ #include "libavutil/imgutils.h"
++#include "libavutil/hwcontext.h"
+ #include "filters.h"
+ #include "dnn_filter_common.h"
+ #include "video.h"
+@@ -38,6 +39,7 @@
+     DnnContext dnnctx;
+     struct SwsContext *sws_uv_scale;
+     int sws_uv_height;
++    AVBufferRef *hw_frames_ctx;  // For CUDA frame support
+ } DnnProcessingContext;
+ 
+ #define OFFSET(x) offsetof(DnnProcessingContext, dnnctx.x)
+@@ -70,6 +72,7 @@
+     AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P,
+     AV_PIX_FMT_YUV444P, AV_PIX_FMT_YUV410P, AV_PIX_FMT_YUV411P,
+     AV_PIX_FMT_NV12,
++    AV_PIX_FMT_CUDA,  // CUDA hardware frames
+     AV_PIX_FMT_NONE
+ };
+ 
+@@ -116,6 +119,13 @@
+             return AVERROR(EIO);
+         }
+         return 0;
++    case AV_PIX_FMT_CUDA:
++        // CUDA frames: handled by torch backend (converts NV12/0RGB32 to RGB internally)
++        if (model_input->dims[dnn_get_channel_idx_by_layout(model_input->layout)] != 3) {
++            LOG_FORMAT_CHANNEL_MISMATCH();
++            return AVERROR(EIO);
++        }
++        return 0;
+     case AV_PIX_FMT_GRAY8:
+     case AV_PIX_FMT_GRAYF32:
+     case AV_PIX_FMT_YUV420P:
+@@ -211,6 +221,32 @@
+         return result;
+     }
+ 
++    // Handle CUDA frames - set up output hw_frames_ctx
++    if (inlink->format == AV_PIX_FMT_CUDA && ff_filter_link(inlink)->hw_frames_ctx) {
++        AVHWFramesContext *in_frames_ctx = (AVHWFramesContext *)ff_filter_link(inlink)->hw_frames_ctx->data;
++        AVHWFramesContext *out_frames_ctx;
++
++        ctx->hw_frames_ctx = av_hwframe_ctx_alloc(in_frames_ctx->device_ref);
++        if (!ctx->hw_frames_ctx)
++            return AVERROR(ENOMEM);
++
++        out_frames_ctx = (AVHWFramesContext *)ctx->hw_frames_ctx->data;
++        out_frames_ctx->format = AV_PIX_FMT_CUDA;
++        out_frames_ctx->sw_format = in_frames_ctx->sw_format;
++        out_frames_ctx->width = outlink->w;
++        out_frames_ctx->height = outlink->h;
++
++        result = av_hwframe_ctx_init(ctx->hw_frames_ctx);
++        if (result < 0) {
++            av_buffer_unref(&ctx->hw_frames_ctx);
++            return result;
++        }
++
++        ff_filter_link(outlink)->hw_frames_ctx = av_buffer_ref(ctx->hw_frames_ctx);
++        if (!ff_filter_link(outlink)->hw_frames_ctx)
++            return AVERROR(ENOMEM);
++    }
++
+     prepare_uv_scale(outlink);
+ 
+     return 0;
+@@ -297,10 +333,25 @@
+         if (ret < 0)
+             return ret;
+         if (ret > 0) {
+-            out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+-            if (!out) {
+-                av_frame_free(&in);
+-                return AVERROR(ENOMEM);
++            // Allocate output frame - use hw_frames_ctx for CUDA frames
++            if (inlink->format == AV_PIX_FMT_CUDA && ctx->hw_frames_ctx) {
++                out = av_frame_alloc();
++                if (!out) {
++                    av_frame_free(&in);
++                    return AVERROR(ENOMEM);
++                }
++                ret = av_hwframe_get_buffer(ctx->hw_frames_ctx, out, 0);
++                if (ret < 0) {
++                    av_frame_free(&in);
++                    av_frame_free(&out);
++                    return ret;
++                }
++            } else {
++                out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
++                if (!out) {
++                    av_frame_free(&in);
++                    return AVERROR(ENOMEM);
++                }
+             }
+             av_frame_copy_props(out, in);
+             if (ff_dnn_execute_model(&ctx->dnnctx, in, out) != 0) {
+@@ -348,6 +399,7 @@
+     DnnProcessingContext *context = ctx->priv;
+ 
+     sws_freeContext(context->sws_uv_scale);
++    av_buffer_unref(&context->hw_frames_ctx);
+     ff_dnn_uninit(&context->dnnctx);
+ }
+ 
+@@ -371,6 +423,7 @@
+     .p.name        = "dnn_processing",
+     .p.description = NULL_IF_CONFIG_SMALL("Apply DNN processing filter to the input."),
+     .p.priv_class  = &dnn_processing_class,
++    .p.flags       = AVFILTER_FLAG_HWDEVICE,
+     .priv_size     = sizeof(DnnProcessingContext),
+     .preinit       = ff_dnn_filter_init_child_class,
+     .init          = init,
+@@ -379,4 +432,5 @@
+     FILTER_OUTPUTS(dnn_processing_outputs),
+     FILTER_PIXFMTS_ARRAY(pix_fmts),
+     .activate      = activate,
++    .flags_internal = FF_FILTER_FLAG_HWFRAME_AWARE,
+ };
