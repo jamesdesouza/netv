@@ -689,9 +689,13 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
         cd "$SRC_DIR"
         rm -rf libtorch libtorch.zip
 
-        # Download from pytorch.org (CXX11 ABI version required for modern compilers)
-        # Format: https://download.pytorch.org/libtorch/{variant}/libtorch-cxx11-abi-shared-with-deps-{version}%2B{variant}.zip
-        LIBTORCH_URL="https://download.pytorch.org/libtorch/${TORCH_VARIANT}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${TORCH_VARIANT}.zip"
+        # Download from pytorch.org
+        # cu124 and earlier use cxx11-abi prefix, cu130+ dropped it
+        if [[ "$TORCH_VARIANT" == cu13* ]] || [[ "$TORCH_VARIANT" == cu14* ]]; then
+            LIBTORCH_URL="https://download.pytorch.org/libtorch/${TORCH_VARIANT}/libtorch-shared-with-deps-${LIBTORCH_VERSION}%2B${TORCH_VARIANT}.zip"
+        else
+            LIBTORCH_URL="https://download.pytorch.org/libtorch/${TORCH_VARIANT}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${TORCH_VARIANT}.zip"
+        fi
         wget -q -O libtorch.zip "$LIBTORCH_URL"
         unzip -q libtorch.zip
         rm -f libtorch.zip
@@ -780,6 +784,47 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
         fi
         echo "Torch CUDA patch applied"
     fi
+
+    # Patch 3: Add TensorRT support (load runtime + handle tuple outputs)
+    if [ -f "$TORCH_BACKEND" ] && ! grep -q "isTuple" "$TORCH_BACKEND"; then
+        echo "Patching ffmpeg torch backend for TensorRT support..."
+
+        # Add dlfcn.h header for dlopen
+        if ! grep -q "#include <dlfcn.h>" "$TORCH_BACKEND"; then
+            sed -i '/#include <torch\/script.h>/a #include <dlfcn.h>' "$TORCH_BACKEND"
+        fi
+
+        # Add TensorRT runtime loading in model init (before torch::jit::load)
+        if ! grep -q "libtorchtrt_runtime" "$TORCH_BACKEND"; then
+            sed -i '/torch::jit::load(ctx->model_filename)/i\
+    // Load TensorRT runtime if available (enables TRT-compiled models)\
+    static bool trt_init_attempted = false;\
+    if (!trt_init_attempted) {\
+        trt_init_attempted = true;\
+        void *trt_handle = dlopen("libtorchtrt_runtime.so", RTLD_NOW | RTLD_GLOBAL);\
+        if (trt_handle) {\
+            av_log(ctx, AV_LOG_INFO, "TensorRT runtime loaded\\n");\
+        }\
+    }' "$TORCH_BACKEND"
+        fi
+
+        # Change forward().toTensor() to handle TRT tuple outputs
+        sed -i 's/\*infer_request->output = th_model->jit_model->forward(inputs)\.toTensor();/auto _fwd_out = th_model->jit_model->forward(inputs);\
+    if (_fwd_out.isTuple()) {\
+        *infer_request->output = _fwd_out.toTuple()->elements()[0].toTensor();\
+    } else {\
+        *infer_request->output = _fwd_out.toTensor();\
+    }/' "$TORCH_BACKEND"
+
+        # Fix device detection for TRT models (they may not have parameters)
+        sed -i 's/c10::Device device = (\*th_model->jit_model->parameters()\.begin())\.device();/c10::Device device = torch::kCUDA;\
+    auto params = th_model->jit_model->parameters();\
+    if (params.begin() != params.end()) {\
+        device = (*params.begin()).device();\
+    }/' "$TORCH_BACKEND"
+
+        echo "Torch TensorRT patch applied"
+    fi
 fi
 
 cd "$FFMPEG_DIR" && \
@@ -813,7 +858,7 @@ CONFIGURE_CMD=(
     --extra-cflags="$EXTRA_CFLAGS"
     --extra-cxxflags="$EXTRA_CXXFLAGS"
     --extra-ldflags="$EXTRA_LDFLAGS"
-    --extra-libs="-lpthread -lm${TORCH_EXTRA_LIBS:+ $TORCH_EXTRA_LIBS}"
+    --extra-libs="-lpthread -lm -ldl${TORCH_EXTRA_LIBS:+ $TORCH_EXTRA_LIBS}"
     --ld="g++"
     --bindir="$BIN_DIR"
     --disable-debug

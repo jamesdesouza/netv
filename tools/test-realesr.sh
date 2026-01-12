@@ -8,7 +8,12 @@ trap 'stty sane 2>/dev/null' EXIT
 FFMPEG="${FFMPEG:-$HOME/.local/bin/ffmpeg}"
 MODEL_DIR="${MODEL_DIR:-$HOME/ffmpeg_build/models}"
 MODEL="${MODEL:-realesr-general-x4v3.pt}"
-MODEL_PATH="$MODEL_DIR/$MODEL"
+# Use MODEL directly if it's an absolute path, otherwise prepend MODEL_DIR
+if [[ "$MODEL" == /* ]]; then
+    MODEL_PATH="$MODEL"
+else
+    MODEL_PATH="$MODEL_DIR/$MODEL"
+fi
 
 # Test parameters
 DURATION=${DURATION:-5}

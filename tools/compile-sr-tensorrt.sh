@@ -6,6 +6,8 @@ set -e
 MODEL_DIR="${MODEL_DIR:-$HOME/ffmpeg_build/models}"
 VENV_DIR="${VENV_DIR:-$MODEL_DIR/.venv}"
 MODEL="${MODEL:-realesr-general-x4v3.pt}"
+LIBTORCH_VERSION="${LIBTORCH_VERSION:-2.9.0}"
+LIBTORCH_VARIANT="${LIBTORCH_VARIANT:-cu130}"
 INPUT_PATH="$MODEL_DIR/$MODEL"
 OUTPUT_PATH="$MODEL_DIR/${MODEL%.pt}-trt.pt"
 
@@ -44,13 +46,14 @@ fi
 source "$VENV_DIR/bin/activate"
 
 # Install dependencies if needed
-if ! python3 -c "import torch_tensorrt" 2>/dev/null; then
-    echo "Installing torch-tensorrt..."
+TORCH_INSTALLED=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "none")
+if [ "$TORCH_INSTALLED" != "${LIBTORCH_VERSION}+${LIBTORCH_VARIANT}" ] || ! python3 -c "import torch_tensorrt" 2>/dev/null; then
+    echo "Installing torch ${LIBTORCH_VERSION} and torch-tensorrt..."
     TMPDIR="${TMPDIR:-/tmp}"
     [ -d "$HOME/tmp" ] && TMPDIR="$HOME/tmp"
     mkdir -p "$TMPDIR"
-    TMPDIR="$TMPDIR" pip install -q torch==2.5.0 --index-url https://download.pytorch.org/whl/cu124
-    TMPDIR="$TMPDIR" pip install -q torch-tensorrt==2.5.0
+    TMPDIR="$TMPDIR" pip install -q "torch==${LIBTORCH_VERSION}" --index-url "https://download.pytorch.org/whl/${LIBTORCH_VARIANT}"
+    TMPDIR="$TMPDIR" pip install -q torch-tensorrt
 fi
 
 echo "Input: $INPUT_PATH"
@@ -87,8 +90,8 @@ trt_model = torch_tensorrt.compile(
 elapsed = time.time() - start
 print(f"Compilation took {elapsed:.1f}s")
 
-# Save
-torch.jit.save(trt_model, "$OUTPUT_PATH")
+# Save using torch_tensorrt's method
+torch_tensorrt.save(trt_model, "$OUTPUT_PATH", output_format="torchscript")
 print(f"Saved: $OUTPUT_PATH")
 
 # Benchmark
