@@ -1,8 +1,11 @@
 #!/bin/bash
 # Build ffmpeg from source with hardware acceleration support
-# Supports: NVIDIA NVENC, AMD AMF, Intel QSV/VAAPI, LibTorch DNN
+# Supports: NVIDIA NVENC, AMD AMF, Intel QSV/VAAPI, LibTorch DNN, TensorRT DNN
 # https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu
 set -e
+
+# Capture script directory before any cd commands
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # =============================================================================
 # Potentially Viable Pre-built FFmpeg alternatives
@@ -846,7 +849,6 @@ fi
 TENSORRT_FLAGS=()
 if [ "$ENABLE_TENSORRT" = "1" ]; then
     echo "Patching FFmpeg for native TensorRT DNN backend..."
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     PATCH_DIR="$SCRIPT_DIR/patches"
 
     # Copy TensorRT backend source file
@@ -855,6 +857,15 @@ if [ "$ENABLE_TENSORRT" = "1" ]; then
         echo "Copied dnn_backend_tensorrt.cpp"
     else
         echo "WARNING: dnn_backend_tensorrt.cpp not found in $PATCH_DIR"
+    fi
+
+    # Copy CUDA kernels for GPU-resident format conversion (zero-copy)
+    if [ -f "$PATCH_DIR/dnn_cuda_kernels.cu" ]; then
+        cp "$PATCH_DIR/dnn_cuda_kernels.cu" "$FFMPEG_DIR/libavfilter/dnn/"
+        cp "$PATCH_DIR/dnn_cuda_kernels.h" "$FFMPEG_DIR/libavfilter/dnn/"
+        echo "Copied CUDA format conversion kernels"
+    else
+        echo "WARNING: dnn_cuda_kernels.cu not found in $PATCH_DIR"
     fi
 
     # Patch dnn_interface.h to add DNN_TRT enum and TRTOptions
@@ -894,11 +905,19 @@ typedef struct TRTOptions {\
         echo "Patched dnn_interface.c"
     fi
 
-    # Patch dnn/Makefile to add TensorRT object
+    # Patch dnn/Makefile to add TensorRT objects and CUDA kernel compilation
     DNN_MAKEFILE="$FFMPEG_DIR/libavfilter/dnn/Makefile"
     if [ -f "$DNN_MAKEFILE" ] && ! grep -q "CONFIG_LIBTENSORRT" "$DNN_MAKEFILE"; then
+        # Add TensorRT backend object
         sed -i '/CONFIG_LIBTORCH.*dnn_backend_torch/a DNN-OBJS-$(CONFIG_LIBTENSORRT)             += dnn/dnn_backend_tensorrt.o' "$DNN_MAKEFILE"
-        echo "Patched dnn/Makefile"
+        # Add CUDA kernels object
+        sed -i '/dnn_backend_tensorrt.o/a DNN-OBJS-$(CONFIG_LIBTENSORRT)               += dnn/dnn_cuda_kernels.o' "$DNN_MAKEFILE"
+        # Add CUDA kernel compilation rule (compile to object, not PTX)
+        echo '' >> "$DNN_MAKEFILE"
+        echo '# CUDA kernel compilation rule - compile to object file (not PTX)' >> "$DNN_MAKEFILE"
+        echo 'libavfilter/dnn/dnn_cuda_kernels.o: libavfilter/dnn/dnn_cuda_kernels.cu' >> "$DNN_MAKEFILE"
+        echo '	$(NVCC) -c -o $@ $< -m64 --compiler-options '"'"'-fPIC'"'"' -I$(SRC_PATH)' >> "$DNN_MAKEFILE"
+        echo "Patched dnn/Makefile with TensorRT and CUDA kernel support"
     fi
 
     # Patch configure to add --enable-libtensorrt option
@@ -911,8 +930,9 @@ typedef struct TRTOptions {\
         # Add to dnn_deps_any
         sed -i 's/dnn_deps_any="libtensorflow libopenvino libtorch"/dnn_deps_any="libtensorflow libopenvino libtorch libtensorrt"/' "$CONFIGURE"
         # Add library check (after libtorch check)
+        # Use nvinfer1::Dims which is a simple struct that can be default-constructed
         sed -i '/enabled libtorch.*require_cxx libtorch/a\
-enabled libtensorrt       \&\& check_cxxflags -std=c++17 \&\& require_cxx libtensorrt NvInfer.h "nvinfer1::createInferRuntime" \\\
+enabled libtensorrt       \&\& check_cxxflags -std=c++17 \&\& require_cxx libtensorrt NvInfer.h "nvinfer1::Dims" \\\
                              -lnvinfer -lcudart -lstdc++ \&\&\
                              add_extralibs -lnvinfer_plugin' "$CONFIGURE"
         echo "Patched configure"
@@ -945,6 +965,12 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
         EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS -I$CUDA_PATH/include"
     fi
     EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$LIB_DIR -Wl,-rpath,$LIB_DIR"
+fi
+if [ "$ENABLE_TENSORRT" = "1" ]; then
+    # TensorRT needs C++ flags with CUDA headers (uses require_cxx for detection)
+    if [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
+        EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS -I$CUDA_PATH/include"
+    fi
 fi
 CONFIGURE_CMD=(
     ./configure
