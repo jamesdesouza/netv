@@ -19,7 +19,7 @@ services:
     image: netv
     container_name: netv
     ports:
-      - "${NETV_PORT:-8000}:1453"
+      - "1453:8000"
     environment:
       - NETV_PORT=8000
       - NETV_HTTPS=${NETV_HTTPS:-}
