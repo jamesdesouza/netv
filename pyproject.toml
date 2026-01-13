@@ -38,6 +38,11 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.8",
 ]
+ai_upscale = [
+    "torch>=2.0",
+    "onnx>=1.14",
+    "tensorrt>=10.0",
+]
 
 [project.urls]
 Repository = "https://github.com/jvdillon/netv"

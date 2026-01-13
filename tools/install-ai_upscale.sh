@@ -24,19 +24,28 @@ echo ""
 # Create output directory
 mkdir -p "$MODEL_DIR"
 
-# Setup Python venv
-VENV_DIR="$MODEL_DIR/.venv"
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating Python virtual environment..."
-    python3 -m venv "$VENV_DIR"
+# Check if dependencies are already available globally (e.g., in Docker)
+USE_VENV=1
+if python3 -c "import torch, onnx, tensorrt" 2>/dev/null; then
+    echo "Dependencies already installed globally, skipping venv."
+    USE_VENV=0
 fi
 
-source "$VENV_DIR/bin/activate"
+if [ "$USE_VENV" = "1" ]; then
+    # Setup Python venv for local installs
+    VENV_DIR="$MODEL_DIR/.venv"
+    if [ ! -d "$VENV_DIR" ]; then
+        echo "Creating Python virtual environment..."
+        python3 -m venv "$VENV_DIR"
+    fi
 
-# Install dependencies
-echo "Installing dependencies..."
-pip install --quiet --upgrade pip
-pip install --quiet torch onnx tensorrt==10.14.1.48.post1
+    source "$VENV_DIR/bin/activate"
+
+    # Install dependencies
+    echo "Installing dependencies..."
+    pip install --quiet --upgrade pip
+    pip install --quiet torch onnx tensorrt
+fi
 
 # Build engines for common resolutions (FFmpeg TensorRT backend needs fixed shapes)
 echo ""
@@ -55,7 +64,7 @@ for res in 480 720 1080; do
     fi
 done
 
-deactivate
+[ "$USE_VENV" = "1" ] && deactivate || true
 
 echo ""
 echo "========================================"

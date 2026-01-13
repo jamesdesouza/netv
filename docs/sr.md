@@ -57,11 +57,11 @@ Models downloaded from: https://github.com/xinntao/Real-ESRGAN/releases
 
 | Script | Purpose | Status |
 |--------|---------|--------|
-| `tools/install-superres.sh` | Download model from HuggingFace, build TensorRT engine | Ready |
+| `tools/install-ai_upscale.sh` | Download model from HuggingFace, build TensorRT engine | Ready |
 | `tools/export-tensorrt.py` | Export PyTorch → ONNX → TensorRT with dynamic shapes | Ready |
 | `tools/install-ffmpeg.sh` | Build FFmpeg with libtorch/TensorRT support | Ready |
 
-### install-superres.sh
+### install-ai_upscale.sh
 
 Main installation script that:
 1. Creates a Python venv in `~/ffmpeg_build/models/.venv`
@@ -210,7 +210,7 @@ The 61ms savings confirms inference is only ~25% of total time.
 ### Install super-resolution (downloads model + builds TensorRT engine)
 ```bash
 cd ~/projects/netv
-./tools/install-superres.sh
+./tools/install-ai_upscale.sh
 ```
 
 This creates `~/ffmpeg_build/models/realesrgan_dynamic_fp16.engine` with dynamic shape support.
