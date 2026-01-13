@@ -53,32 +53,59 @@ Models stored in: `~/ffmpeg_build/models/`
 
 | Script | Purpose | Status |
 |--------|---------|--------|
-| `tools/download-sr-models.sh` | Download .pth, convert to TorchScript (.pt) | Ready |
-| `tools/compile-sr-tensorrt.sh` | Compile .pt → TensorRT (-trt.pt) | Ready |
-| `tools/test-realesr.sh` | Benchmark FFmpeg + libtorch | Ready |
-| `tools/install-ffmpeg.sh` | Build FFmpeg with libtorch support | Ready |
+| `tools/install-superres.sh` | Download model from HuggingFace, build TensorRT engine | Ready |
+| `tools/export-tensorrt.py` | Export PyTorch → ONNX → TensorRT with dynamic shapes | Ready |
+| `tools/install-ffmpeg.sh` | Build FFmpeg with libtorch/TensorRT support | Ready |
+
+### install-superres.sh
+
+Main installation script that:
+1. Creates a Python venv in `~/ffmpeg_build/models/.venv`
+2. Installs torch, huggingface_hub, onnx, tensorrt
+3. Downloads Real-ESRGAN from HuggingFace
+4. Builds TensorRT engine with dynamic shapes (270p to 1280p)
+5. Outputs `~/ffmpeg_build/models/realesrgan_dynamic_fp16.engine`
+
+### export-tensorrt.py
+
+Flexible export script with options:
+```bash
+# Default: dynamic shapes for 270p-1280p, FP16
+python tools/export-tensorrt.py --output model.engine
+
+# Custom height range
+python tools/export-tensorrt.py --min-height 360 --max-height 1080
+
+# From custom model file
+python tools/export-tensorrt.py --model /path/to/model.pth
+
+# ONNX only (skip TensorRT build)
+python tools/export-tensorrt.py --onnx-only --keep-onnx
+```
+
+Dynamic shape support: A single engine handles inputs from min to max resolution.
 
 ## FFmpeg Patches
 
-Location: `tools/patches/`
+Location: `tools/patches/` - Full source file replacements (not diffs)
 
-| File | Type | Purpose |
+| File | Size | Purpose |
 |------|------|---------|
-| `ffmpeg-dnn-cuda-frames.patch` | Unified patch | CUDA zero-copy for dnn_backend_torch + vf_dnn_processing |
-| `patch_cuda_dlopen.py` | Python script | Adds dlopen for libtorch_cuda.so |
-| `patch_dnn_cuda_frames.py` | Python script | CUDA frame support |
-| `patch_dnn_cuda_frames_v2.py` | Python script | Updated version |
-| `patch_torch_input_cuda.py` | Python script | CUDA input handling |
-| `patch_torch_zerocopy_full.py` | Python script | Full zero-copy implementation |
-| `patch_zerocopy.py` | Python script | Basic zero-copy |
+| `dnn_backend_tensorrt.cpp` | 30.5 KB | Native TensorRT backend for FFmpeg |
+| `dnn_backend_torch.cpp` | 32.4 KB | LibTorch backend with CUDA support |
+| `vf_dnn_processing.c` | ~16 KB | Video filter with CUDA frame support |
+| `dnn_cuda_kernels.cu` | 7.1 KB | GPU-resident format conversion kernels |
+| `dnn_cuda_kernels.h` | ~1 KB | CUDA kernel headers |
 
-### Main patch (ffmpeg-dnn-cuda-frames.patch)
+### CUDA Kernels (dnn_cuda_kernels.cu)
 
-Adds CUDA frame support to avoid GPU↔CPU copies:
-- Modifies `libavfilter/dnn/dnn_backend_torch.cpp`
-- Modifies `libavfilter/vf_dnn_processing.c`
-- Creates tensors directly from CUDA device pointers
-- Enables pipeline: `hwupload_cuda -> dnn_processing -> nvenc`
+Zero-copy GPU-resident format conversion:
+
+1. **`hwc_uint8_to_nchw_float32_kernel`**: HWC uint8 [0,255] → NCHW float32 [0,1]
+2. **`nchw_float32_to_hwc_uint8_kernel`**: NCHW float32 [0,1] → HWC uint8 [0,255]
+3. 4-channel variants for RGBA formats
+
+These kernels keep data on GPU, avoiding costly GPU↔CPU transfers.
 
 ## Benchmark Plan
 
@@ -159,20 +186,21 @@ The 61ms savings confirms inference is only ~25% of total time.
 
 ## Usage
 
-### Download and convert models
+### Install super-resolution (downloads model + builds TensorRT engine)
 ```bash
 cd ~/projects/netv
-./tools/download-sr-models.sh
+./tools/install-superres.sh
 ```
 
-### Compile TensorRT model (optional, for faster inference)
-```bash
-MODEL=RealESRGAN_x4plus.pt ./tools/compile-sr-tensorrt.sh
-```
+This creates `~/ffmpeg_build/models/realesrgan_dynamic_fp16.engine` with dynamic shape support.
 
-### Test FFmpeg performance
+### Manual export with custom settings
 ```bash
-./tools/test-realesr.sh
+# Export for specific resolution range
+python tools/export-tensorrt.py --min-height 480 --max-height 1080 --output custom.engine
+
+# Export FP32 (higher precision, slower)
+python tools/export-tensorrt.py --fp32 --output model_fp32.engine
 ```
 
 ### FFmpeg command examples
@@ -206,25 +234,24 @@ The fastest approach - FFmpeg loads TensorRT engines directly, no libtorch depen
 ENABLE_TENSORRT=1 ENABLE_LIBTORCH=0 ./tools/install-ffmpeg.sh
 ```
 
-**Export model to TensorRT engine:**
+**Export model to TensorRT engine with dynamic shapes:**
 ```bash
-# Export for 720p input (creates model_1280x720_fp16.engine)
-python tools/export-tensorrt.py --width 1280 --height 720 --fp16
+# Default: supports 270p to 1280p input (16:9 aspect ratio)
+python tools/export-tensorrt.py --output model.engine
 
-# Export for 1080p input
-python tools/export-tensorrt.py --width 1920 --height 1080 --fp16
+# Custom range (e.g., 360p to 1080p)
+python tools/export-tensorrt.py --min-height 360 --max-height 1080 --output model.engine
 ```
 
 **Run with FFmpeg:**
 ```bash
-ffmpeg -i input_720p.mp4 \
-  -vf "dnn_processing=dnn_backend=tensorrt:model=model_1280x720_fp16.engine" \
+ffmpeg -i input.mp4 \
+  -vf "dnn_processing=dnn_backend=tensorrt:model=$HOME/ffmpeg_build/models/realesrgan_dynamic_fp16.engine" \
   -c:v hevc_nvenc output.mp4
 ```
 
-**Note:** TensorRT engines are compiled for fixed input dimensions. You need separate
-engines for different resolutions (720p, 1080p, etc.). Use `scale=W:H` before
-dnn_processing to match the engine's expected input.
+**Note:** Dynamic shape engines handle a range of input resolutions without needing
+separate engines. The engine is optimized for the `--opt-height` (default 720p).
 
 ### Option B: LibTorch + torch_tensorrt
 
@@ -236,24 +263,14 @@ Requires larger dependencies but supports dynamic shapes.
 ENABLE_TENSORRT=0 ENABLE_LIBTORCH=1 ./tools/install-ffmpeg.sh
 ```
 
-**Compile model with torch_tensorrt:**
+**Run with FFmpeg:**
 
 ```bash
-./tools/compile-sr-tensorrt.sh
-```
+TORCH_LIB=~/ffmpeg_sources/libtorch/lib
 
-Creates `realesr-general-x4v3-trt.pt` optimized for FP16 inference.
-
-**Run TensorRT model with FFmpeg:**
-
-```bash
-TRT_LIB=~/ffmpeg_build/models/.venv/lib/python3.12/site-packages/torch_tensorrt/lib
-TRTCORE=~/ffmpeg_build/models/.venv/lib/python3.12/site-packages/tensorrt_libs
-TORCH_LIB=~/.local/lib
-
-LD_LIBRARY_PATH="$TRT_LIB:$TRTCORE:$TORCH_LIB:$LD_LIBRARY_PATH" \
+LD_LIBRARY_PATH="$TORCH_LIB:$LD_LIBRARY_PATH" \
 ffmpeg -i input.mp4 \
-  -vf "dnn_processing=dnn_backend=torch:model=$HOME/ffmpeg_build/models/realesr-general-x4v3-trt.pt:device=cuda" \
+  -vf "format=rgb24,dnn_processing=dnn_backend=torch:model=$HOME/ffmpeg_build/models/realesr-general-x4v3.pt:device=cuda" \
   output.mp4
 ```
 
