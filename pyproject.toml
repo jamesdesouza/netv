@@ -96,6 +96,7 @@ section-order = [
 [tool.basedpyright]
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
+exclude = ["tools/", ".venv/"]  # Optional scripts + virtual env
 
 [tool.pytest.ini_options]
 testpaths = ["."]
