@@ -15,13 +15,13 @@ services:
     build:
       context: .
       args:
-        FFMPEG_IMAGE: ${FFMPEG_IMAGE:-ghcr.io/jvdillon/netv-ffmpeg:latest}
+        FFMPEG_IMAGE: ${FFMPEG_IMAGE:-linuxserver/ffmpeg:version-8.0.1-cli}
     image: netv
     container_name: netv
     ports:
       - "${NETV_PORT:-8000}:8000"
     environment:
-      - NETV_PORT=8000
+      - NETV_PORT=1453
       - NETV_HTTPS=${NETV_HTTPS:-}
       - LOG_LEVEL=INFO  # DEBUG for verbose logging
     volumes:
@@ -33,8 +33,8 @@ services:
       # - /dev/shm:/tmp
     restart: unless-stopped
     # Hardware acceleration (Intel/AMD) - comment out if no /dev/dri
-    devices:
-      - /dev/dri:/dev/dri
+    #devices:
+    #  - /dev/dri:/dev/dri
 
   # NVIDIA GPU: docker compose --profile nvidia up -d
   netv-nvidia:
