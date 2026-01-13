@@ -19,9 +19,9 @@ services:
     image: netv
     container_name: netv
     ports:
-      - "${NETV_PORT:-8000}:8000"
+      - "${NETV_PORT:-8000}:1453"
     environment:
-      - NETV_PORT=1453
+      - NETV_PORT=8000
       - NETV_HTTPS=${NETV_HTTPS:-}
       - LOG_LEVEL=INFO  # DEBUG for verbose logging
     volumes:
