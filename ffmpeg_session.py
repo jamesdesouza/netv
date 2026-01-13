@@ -25,6 +25,7 @@ from ffmpeg_command import (
     MediaInfo,
     SubtitleStream,
     build_hls_ffmpeg_cmd,
+    get_ffmpeg_env,
     get_hls_segment_duration,
     get_settings,
     get_transcode_dir,
@@ -657,6 +658,7 @@ async def _handle_existing_vod_session(
     do_probe: bool,
     max_resolution: str = "1080p",
     quality: str = "high",
+    sr_mode: str = "off",
 ) -> dict[str, Any] | None:
     """Handle existing VOD session: reuse active, return cached, or append.
 
@@ -714,6 +716,7 @@ async def _handle_existing_vod_session(
         quality,
         get_user_agent(),
         None,
+        sr_mode,
     )
 
     i_idx = cmd.index("-i")
@@ -731,6 +734,7 @@ async def _handle_existing_vod_session(
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=get_ffmpeg_env(),
     )
     if not _update_session_process(existing_id, process):
         _kill_process(process)
@@ -776,6 +780,7 @@ async def _try_reuse_session(
             ),
             settings.get("max_resolution", "1080p"),
             settings.get("quality", "high"),
+            settings.get("sr_mode", "off"),
         )
 
     # Live: return existing session if snapshot available
@@ -814,6 +819,7 @@ async def _do_start_transcode(
     hw = settings.get("transcode_hw", "software")
     max_resolution = settings.get("max_resolution", "1080p")
     quality = settings.get("quality", "high")
+    sr_mode = settings.get("sr_mode", "off")
     is_vod = content_type in ("movie", "series")
     probe_key = {"movie": "probe_movies", "series": "probe_series", "live": "probe_live"}
     do_probe = settings.get(probe_key.get(content_type, ""), False)
@@ -867,6 +873,7 @@ async def _do_start_transcode(
         quality,
         get_user_agent(),
         deinterlace_fallback,
+        sr_mode,
     )
     if old_seek_offset > 0:
         i_idx = cmd.index("-i")
@@ -886,6 +893,7 @@ async def _do_start_transcode(
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=get_ffmpeg_env(),
     )
 
     stderr_lines: list[str] = []
@@ -1142,6 +1150,7 @@ async def seek_transcode(session_id: str, seek_time: float) -> dict[str, Any]:
     hw = settings.get("transcode_hw", "software")
     max_resolution = settings.get("max_resolution", "1080p")
     quality = settings.get("quality", "high")
+    sr_mode = settings.get("sr_mode", "off")
     seg_duration = get_hls_segment_duration()
     segment_num = int(seek_time / seg_duration)
 
@@ -1216,6 +1225,8 @@ async def seek_transcode(session_id: str, seek_time: float) -> dict[str, Any]:
         max_resolution,
         quality,
         get_user_agent(),
+        None,
+        sr_mode,
     )
     i_idx = cmd.index("-i")
     cmd.insert(i_idx, str(seek_time))
@@ -1239,6 +1250,7 @@ async def seek_transcode(session_id: str, seek_time: float) -> dict[str, Any]:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=get_ffmpeg_env(),
     )
 
     if not _update_seek_session(session_id, info.url, process, seek_time):

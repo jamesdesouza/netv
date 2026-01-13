@@ -1,0 +1,62 @@
+# netv with AI Upscale (TensorRT super-resolution)
+#
+# This image includes everything needed for AI upscaling:
+# - FFmpeg with TensorRT DNN backend
+# - Python + torch + tensorrt for building engines
+# - Auto-builds TensorRT engines on first start (GPU-specific)
+#
+# Build:
+#   docker build -f Dockerfile.ai_upscale -t netv-ai .
+#
+# Run (engines are cached in volume):
+#   docker run --gpus all -v netv-models:/models -p 8000:8000 netv-ai
+#
+# Note: First start takes ~2-3 minutes to build TensorRT engines for your GPU.
+# Subsequent starts are instant (engines cached in /models volume).
+
+ARG FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:latest
+FROM ${FFMPEG_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gosu \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# App setup
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY *.py ./
+COPY templates/ templates/
+COPY static/ static/
+COPY tools/ tools/
+
+# Install Python dependencies (app + ai_upscale group)
+RUN pip install --no-cache-dir --break-system-packages . torch onnx tensorrt
+
+# Runtime config
+EXPOSE 8000
+
+ENV NETV_PORT=8000
+ENV NETV_HTTPS=""
+ENV LOG_LEVEL=INFO
+ENV SR_ENGINE_DIR=/models
+
+# Create non-root user
+RUN useradd -m netv
+
+# Copy entrypoint and set permissions
+COPY entrypoint-ai_upscale.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Create models directory (will be a volume mount point)
+RUN mkdir -p /models && chown netv:netv /models
+VOLUME /models
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=5)" || exit 1
+
+ENTRYPOINT ["/app/entrypoint.sh"]

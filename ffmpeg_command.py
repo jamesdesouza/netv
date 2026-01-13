@@ -94,6 +94,10 @@ _gpu_nvdec_codecs: set[str] | None = None  # None = not probed yet
 _has_libplacebo: bool | None = None  # None = not probed yet
 _load_settings: Callable[[], dict[str, Any]] = dict
 
+# Super-resolution configuration (set by init())
+# Directory containing TensorRT engines: realesrgan_{480,720,1080}p_fp16.engine
+_sr_engine_dir: str = ""
+
 # Use old "cache" if it exists (backwards compat), otherwise ".cache"
 _OLD_CACHE = pathlib.Path(__file__).parent / "cache"
 _CACHE_DIR = _OLD_CACHE if _OLD_CACHE.exists() else pathlib.Path(__file__).parent / ".cache"
@@ -140,16 +144,89 @@ class MediaInfo:
     is_hls: bool = False  # True if format is HLS (for input options)
 
 
-def init(load_settings: Callable[[], dict[str, Any]]) -> None:
-    """Initialize module with settings loader."""
-    global _load_settings
+def init(
+    load_settings: Callable[[], dict[str, Any]],
+    sr_engine_dir: str = "",
+) -> None:
+    """Initialize module with settings loader and optional AI Upscale config."""
+    global _load_settings, _sr_engine_dir
     _load_settings = load_settings
+    _sr_engine_dir = sr_engine_dir
     _load_series_probe_cache()
+    if _sr_engine_dir:
+        log.info("AI Upscale enabled: engine_dir=%s", _sr_engine_dir)
 
 
 def get_settings() -> dict[str, Any]:
     """Get current settings."""
     return _load_settings()
+
+
+def get_ffmpeg_env() -> dict[str, str] | None:
+    """Get environment for ffmpeg subprocess. Returns None (ffmpeg has libtorch via rpath)."""
+    # ffmpeg is built with -Wl,-rpath pointing to libtorch, so no LD_LIBRARY_PATH needed
+    return None
+
+
+def _build_sr_filter(sr_mode: str, source_height: int, target_height: int) -> str:
+    """Build AI Upscale filter string if needed. Returns empty string if disabled."""
+    if not _sr_engine_dir or sr_mode == "off":
+        return ""
+
+    # Determine if SR should be applied based on mode and source resolution
+    # SR model is 4x upscale, so we upscale then use Area to scale to target
+    apply_sr = False
+
+    if sr_mode == "enhance":
+        # Always apply SR for enhancement (cleanup/sharpen), then scale back
+        apply_sr = True
+    elif sr_mode == "upscale_1080":
+        # Apply SR if source is below 1080p
+        apply_sr = source_height < 1080
+    elif sr_mode == "upscale_4k":
+        # Apply SR if source is below 4K
+        apply_sr = source_height < 2160
+
+    if not apply_sr:
+        return ""
+
+    # Select engine based on source resolution (TensorRT needs fixed input dimensions)
+    # Scale input to match engine, apply SR (4x), then scale to target
+    # Default to 720p engine if probe failed (source_height <= 0)
+    if source_height <= 0:
+        # Probe failed - default to 720p engine (good middle ground)
+        log.warning("SR: probe failed (height=%d), defaulting to 720p engine", source_height)
+        engine_name = "realesrgan_720p_fp16.engine"
+        engine_height, engine_width = 720, 1280
+    elif source_height <= 540:
+        engine_name = "realesrgan_480p_fp16.engine"
+        engine_height, engine_width = 480, 848  # 16:9 rounded to 8
+    elif source_height <= 900:
+        engine_name = "realesrgan_720p_fp16.engine"
+        engine_height, engine_width = 720, 1280
+    else:
+        engine_name = "realesrgan_1080p_fp16.engine"
+        engine_height, engine_width = 1080, 1920
+
+    engine_path = f"{_sr_engine_dir}/{engine_name}"
+
+    # Build SR filter chain:
+    # 1. Scale to engine's expected input size (preserving aspect with padding if needed)
+    # 2. Convert to RGB (model expects 3-channel RGB input)
+    # 3. hwupload to GPU (critical for performance - keeps data on GPU)
+    # 4. Apply SR via TensorRT dnn_processing (outputs 4x resolution on GPU)
+    # 5. Scale down on GPU to target resolution
+    sr_filter = (
+        f"scale={engine_width}:{engine_height}:force_original_aspect_ratio=decrease,"
+        f"pad={engine_width}:{engine_height}:(ow-iw)/2:(oh-ih)/2,"
+        f"format=rgb24,"
+        f"hwupload,"
+        f"dnn_processing=dnn_backend=8:model={engine_path}"
+    )
+    if target_height:
+        # After dnn_processing, data is on GPU - use scale_cuda with explicit params
+        sr_filter += f",scale_cuda=w=-2:h={target_height}"
+    return sr_filter
 
 
 def get_hls_segment_duration() -> float:
@@ -714,6 +791,8 @@ def _build_video_args(
     max_resolution: str,
     quality: str,
     is_hdr: bool = False,
+    sr_mode: str = "off",
+    source_height: int = 0,
 ) -> tuple[list[str], list[str]]:
     """Build video args. Returns (pre_input_args, post_input_args)."""
     if copy_video:
@@ -721,6 +800,16 @@ def _build_video_args(
 
     # Parse hw into encoder and fallback
     enc_type, fallback = _parse_hw(hw)
+
+    max_h = _MAX_RES_HEIGHT.get(max_resolution)
+
+    # Check if SR should be applied (VOD only, discrete GPUs)
+    sr_filter = ""
+    if sr_mode != "off" and enc_type in ("nvenc", "amf") and _sr_engine_dir:
+        sr_filter = _build_sr_filter(sr_mode, source_height, max_h or 0)
+        # SR requires CPU frames, so disable hw pipeline when SR active
+        if sr_filter:
+            use_hw_pipeline = False
 
     # Fall back gracefully if VAAPI is needed but no device was detected
     needs_vaapi = enc_type == "vaapi" or fallback == "vaapi"
@@ -735,7 +824,6 @@ def _build_video_args(
         fallback = "software"
 
     # Height expr for scale filter (scale down only, -2 keeps width divisible by 2)
-    max_h = _MAX_RES_HEIGHT.get(max_resolution)
     h = f"min(ih\\,{max_h})" if max_h else None
     qp = _QUALITY_QP.get(quality, 28)
 
@@ -781,7 +869,14 @@ def _build_video_args(
             scale = f"scale_cuda=-2:{h}:format=nv12" if h else "scale_cuda=format=nv12"
             # HDR tone mapping: prefer libplacebo (Vulkan GPU), fall back to CPU zscale+tonemap
             # Deinterlace before tonemap (CPU yadif) for consistency with hw decode path
-            if is_hdr:
+            if sr_filter:
+                # SR path: CPU decode -> deinterlace -> SR (GPU) -> encode
+                # SR filter ends with scale_cuda, outputs CUDA frames ready for nvenc
+                # Need init_hw_device for TensorRT dnn_processing to use GPU
+                pre = ["-init_hw_device", "cuda=cu", "-filter_hw_device", "cu"]
+                deint = "yadif=0," if deinterlace else ""
+                vf = f"{deint}{sr_filter}"
+            elif is_hdr:
                 deint = "yadif=0," if deinterlace else ""  # CPU deinterlace before tonemap
                 if _has_libplacebo_filter():
                     tonemap = "libplacebo=tonemapping=hable:colorspace=bt709:color_primaries=bt709:color_trc=bt709,format=nv12,hwupload_cuda,"
@@ -792,7 +887,7 @@ def _build_video_args(
                 deint = "yadif_cuda=0," if deinterlace else ""  # GPU deinterlace after upload
                 tonemap = "format=nv12,hwupload_cuda,"
                 vf = f"{tonemap}{deint}{scale}"
-        preset = "p4" if deinterlace else "p2"
+        preset = "p4" if deinterlace or sr_filter else "p2"
         encoder = "h264_nvenc"
         # Lookahead for better quality, B-frames for compression, AQ for adaptive quantization
         enc_opts = [
@@ -968,16 +1063,22 @@ def build_hls_ffmpeg_cmd(
     quality: str = "high",
     user_agent: str | None = None,
     deinterlace_fallback: bool | None = None,
+    sr_mode: str = "off",
 ) -> list[str]:
     """Build ffmpeg command for HLS transcoding."""
     # Check if we can copy streams directly (compatible codecs, no processing needed)
     max_h = _MAX_RES_HEIGHT.get(max_resolution, 9999)
     needs_scale = media_info and media_info.height > max_h
+
+    # SR requires re-encode (can't copy video when SR is active)
+    sr_active = sr_mode != "off" and _sr_engine_dir
+
     copy_video = bool(
         media_info
         and media_info.video_codec == "h264"
         and media_info.pix_fmt == "yuv420p"
         and not needs_scale
+        and not sr_active
         and not media_info.interlaced  # Can't copy if deinterlacing needed
     )
     copy_audio = bool(
@@ -1018,6 +1119,8 @@ def build_hls_ffmpeg_cmd(
         max_resolution=max_resolution,
         quality=quality,
         is_hdr=media_info.is_hdr if media_info else False,
+        sr_mode=sr_mode,
+        source_height=media_info.height if media_info else 0,
     )
     audio_args = _build_audio_args(
         copy_audio=copy_audio,
