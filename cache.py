@@ -24,74 +24,46 @@ log = logging.getLogger(__name__)
 # ===========================================================================
 
 
-def _detect_vaapi_device() -> str | None:
-    """Auto-detect the VAAPI render device (Intel or AMD GPU).
-
-    Returns render device path like '/dev/dri/renderD128' or None if not found.
-    """
-    by_path = pathlib.Path("/dev/dri/by-path")
-    if not by_path.exists():
-        return None
-
-    # Map PCI addresses to render devices
-    pci_to_render: dict[str, str] = {}
-    for link in by_path.iterdir():
-        if "-render" in link.name:
-            # Extract PCI address from name like "pci-0000:00:02.0-render"
-            pci_addr = link.name.replace("pci-", "").replace("-render", "")
-            render_dev = f"/dev/dri/{link.resolve().name}"
-            pci_to_render[pci_addr] = render_dev
-
-    if not pci_to_render:
-        return None
-
-    # Find Intel (8086) or AMD (1002) GPU via lspci
+def _get_gpu_vendor() -> str | None:
+    """Detect GPU vendor ID via lspci or sysfs. Returns '8086' (Intel) or '1002' (AMD)."""
+    # Try lspci first (works on bare metal)
     try:
-        result = subprocess.run(
-            ["lspci", "-nn"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
+        result = subprocess.run(["lspci", "-nn"], capture_output=True, text=True, timeout=5)
         for line in result.stdout.splitlines():
-            # Look for VGA/Display controllers with Intel or AMD vendor ID
             if "VGA" in line or "Display" in line or "3D" in line:
-                # Extract PCI address (first field, e.g., "00:02.0")
-                pci_addr = "0000:" + line.split()[0]
-                # Check vendor ID in brackets like [8086:0402] or [1002:...]
-                if ("[8086:" in line or "[1002:" in line) and pci_addr in pci_to_render:
-                    return pci_to_render[pci_addr]
+                if "[8086:" in line:
+                    return "8086"
+                if "[1002:" in line:
+                    return "1002"
     except Exception:
         pass
 
-    # Fallback: return first render device (usually works for single-GPU systems)
-    return "/dev/dri/renderD128" if pathlib.Path("/dev/dri/renderD128").exists() else None
+    # Fallback: check sysfs (works in containers)
+    drm_path = pathlib.Path("/sys/class/drm")
+    if drm_path.exists():
+        for card in drm_path.iterdir():
+            if card.name.startswith("card") and card.name[4:].isdigit():
+                vendor_file = card / "device" / "vendor"
+                if vendor_file.exists():
+                    vendor = vendor_file.read_text().strip().replace("0x", "")
+                    if vendor in ("8086", "1002"):
+                        return vendor
+    return None
+
+
+def _detect_vaapi_device() -> str | None:
+    """Auto-detect the VAAPI render device. Returns '/dev/dri/renderD128' or None."""
+    render = pathlib.Path("/dev/dri/renderD128")
+    return str(render) if render.exists() else None
 
 
 def _detect_libva_driver() -> str | None:
-    """Auto-detect the appropriate LIBVA driver name.
-
-    Returns 'i965', 'iHD', or 'radeonsi' based on detected GPU, or None.
-    """
-    try:
-        result = subprocess.run(
-            ["lspci", "-nn"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        for line in result.stdout.splitlines():
-            if "VGA" in line or "Display" in line:
-                if "[8086:" in line:
-                    # Intel GPU - check generation for i965 vs iHD
-                    # Gen 8+ (Broadwell and newer) can use iHD, older use i965
-                    # For simplicity, try i965 first (works on more systems)
-                    return "i965"
-                if "[1002:" in line:
-                    # AMD GPU
-                    return "radeonsi"
-    except Exception:
-        pass
+    """Auto-detect LIBVA driver name. Returns 'i965', 'radeonsi', or None."""
+    vendor = _get_gpu_vendor()
+    if vendor == "8086":
+        return "i965"
+    if vendor == "1002":
+        return "radeonsi"
     return None
 
 
